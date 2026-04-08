@@ -17,6 +17,9 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
+from standalone_viser_mesh import StandaloneMujocoScene
+import viser
+
 MODEL = "/media/lhx/E/share/project/humaniod_ws/unitree-deploy/robot_model/g1.xml"
 
 G1_NUM_MOTOR = 29
@@ -92,8 +95,6 @@ class Custom:
         self.update_mode_machine_ = False
         self.crc = CRC()
 
-        self.time_prev = 0.0
-
     def Init(self):
         self.msc = MotionSwitcherClient()
         self.msc.SetTimeout(5.0)
@@ -109,9 +110,13 @@ class Custom:
         self.lowcmd_publisher_ = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher_.Init()
 
+        self.model = mujoco.MjModel.from_xml_path(MODEL)
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
         self.data.qpos[:] = np.zeros(self.model.nq)
+
+        self.viser_server = viser.ViserServer()
+        self.viser_scene = StandaloneMujocoScene.create(self.viser_server, self.model)  
 
         # create subscriber # 
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
@@ -120,6 +125,8 @@ class Custom:
         # create subscriber for estimated state (optional, for visualization) #
         self.odomstate_subscriber = ChannelSubscriber("rt/odommodestate", SportModeState_)
         self.odomstate_subscriber.Init(self.OdomStateHandler, 10)
+
+        # self.time_prev = 0.0
 
     def Start(self):
         self.lowCmdWriteThreadPtr = RecurrentThread(
@@ -130,6 +137,9 @@ class Custom:
 
         if self.update_mode_machine_ == True:
             self.lowCmdWriteThreadPtr.Start()
+
+        self.timerPtr = RecurrentThread(interval=0.05, target=self.Visualize, name="visualize")
+        self.timerPtr.Start()
 
     def OdomStateHandler(self, msg: SportModeState_):
         self.odom_state = msg
@@ -153,8 +163,6 @@ class Custom:
         if(self.counter_ % 100 == 0) :
             num_motor = self.model.nu
             self.data.qpos[7:7+num_motor] = [self.low_state.motor_state[i].q for i in range(num_motor)]
-            mujoco.mj_forward(self.model, self.data)
-            self.viewer.sync()
 
     def LowCmdWrite(self):
         self.time_ += self.control_dt_
@@ -216,6 +224,14 @@ class Custom:
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher_.Write(self.low_cmd)
 
+    def Visualize(self):
+        # if time.time() - self.time_prev > 0.05:  # visualize at 20 Hz
+        self.data.qpos[7:7+G1_NUM_MOTOR] = [self.low_state.motor_state[i].q for i in range(G1_NUM_MOTOR)]
+        mujoco.mj_forward(self.model, self.data)
+        self.viewer.sync()
+        self.viser_scene.update_from_mjdata(self.data)
+        self.time_prev = time.time()
+
 if __name__ == '__main__':
 
     print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
@@ -228,7 +244,7 @@ if __name__ == '__main__':
 
     custom = Custom()
     custom.Init()
-    custom.Start()
+    custom.Start()  
 
     while True:        
         time.sleep(1)
