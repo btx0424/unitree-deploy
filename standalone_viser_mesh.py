@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,11 @@ import trimesh.visual
 import viser
 import viser.transforms as vtf
 from mujoco import mj_id2name, mjtGeom, mjtObj
+
+try:
+    import pyrealsense2 as rs
+except ImportError:
+    rs = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +59,39 @@ class CameraSpec:
     height: int
     fov_y_rad: float
     aspect: float
+
+
+@dataclass
+class VirtualCameraFrame:
+    camera_id: int
+    camera_name: str
+    rgb: np.ndarray
+    depth: np.ndarray | None
+    position: np.ndarray
+    wxyz: np.ndarray
+    timestamp_sec: float
+
+
+@dataclass
+class RealSenseFrame:
+    camera_name: str
+    serial_number: str | None
+    color: np.ndarray | None
+    depth: np.ndarray | None
+    timestamp_sec: float | None
+
+
+@dataclass
+class RealSenseCameraConfig:
+    camera_name: str = "realsense"
+    serial_number: str | None = None
+    color_width: int = 640
+    color_height: int = 480
+    depth_width: int = 640
+    depth_height: int = 480
+    fps: int = 30
+    enable_depth: bool = True
+    align_depth_to_color: bool = True
 
 
 def _body_name(mj_model: mujoco.MjModel, body_id: int) -> str:
@@ -290,7 +329,7 @@ def load_model(xml: str) -> mujoco.MjModel:
     return mujoco.MjModel.from_xml_path(str(xml_path))
 
 
-class StandaloneCameraViewer:
+class MujocoCameraStream:
     def __init__(
         self,
         server: viser.ViserServer,
@@ -298,60 +337,47 @@ class StandaloneCameraViewer:
         camera_spec: CameraSpec,
         *,
         show_depth: bool = True,
+        show_frustum: bool = True,
+        frustum_scale: float = 0.15,
     ):
         self.server = server
         self.mj_model = mj_model
         self.spec = camera_spec
         self.show_depth = show_depth
+        self.show_frustum = show_frustum
         self._renderer = mujoco.Renderer(mj_model, height=self.spec.height, width=self.spec.width)
+        self.latest_frame: VirtualCameraFrame | None = None
 
-        with self.server.gui.add_folder(f"Camera: {self.spec.camera_name}", expand_by_default=False):
-            self._rgb_handle = self.server.gui.add_image(
-                image=np.zeros((self.spec.height, self.spec.width, 3), dtype=np.uint8),
-                label=f"{self.spec.camera_name}_rgb",
-                format="jpeg",
+        self._frustum_handle = None
+        if self.show_frustum:
+            self._frustum_handle = self.server.scene.add_camera_frustum(
+                name=f"/cameras/{self.spec.camera_name}/frustum",
+                fov=self.spec.fov_y_rad,
+                aspect=self.spec.aspect,
+                position=np.zeros(3, dtype=np.float32),
+                wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                scale=frustum_scale,
+                color=(200, 200, 200),
             )
-            self._show_frustum_toggle = self.server.gui.add_checkbox("Frustum", initial_value=True)
-            self._depth_scale_slider = None
-            self._depth_handle = None
-            if self.show_depth:
-                self._depth_scale_slider = self.server.gui.add_slider(
-                    label="Depth Scale",
-                    min=0.1,
-                    max=10.0,
-                    step=0.1,
-                    initial_value=3.0,
-                )
-                self._depth_handle = self.server.gui.add_image(
-                    image=np.zeros((self.spec.height, self.spec.width, 3), dtype=np.uint8),
-                    label=f"{self.spec.camera_name}_depth",
-                    format="jpeg",
-                )
 
-        self._frustum_handle = self.server.scene.add_camera_frustum(
-            name=f"/cameras/{self.spec.camera_name}/frustum",
-            fov=self.spec.fov_y_rad,
-            aspect=self.spec.aspect,
-            position=np.zeros(3, dtype=np.float32),
-            wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            scale=0.15,
-            color=(200, 200, 200),
-        )
-
-    def _update_frustum(self, mj_data: mujoco.MjData) -> None:
-        if not self._show_frustum_toggle.value:
-            self._frustum_handle.visible = False
-            return
-
-        self._frustum_handle.visible = True
+    def _camera_pose(self, mj_data: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         cam_pos = np.asarray(mj_data.cam_xpos[self.spec.camera_id], dtype=np.float32)
         cam_mat = np.asarray(mj_data.cam_xmat[self.spec.camera_id], dtype=np.float32).reshape(3, 3)
 
+        # MuJoCo cameras use +Y up and look along -Z, while viser frustums follow
+        # the OpenCV convention of +Y down and +Z forward.
         rot_180_x = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]], dtype=np.float32)
         cam_mat_adjusted = cam_mat @ rot_180_x
+        cam_wxyz = vtf.SO3.from_matrix(cam_mat_adjusted).wxyz.astype(np.float32)
+        return cam_pos, cam_wxyz
 
-        self._frustum_handle.position = cam_pos
-        self._frustum_handle.wxyz = vtf.SO3.from_matrix(cam_mat_adjusted).wxyz.astype(np.float32)
+    def _update_frustum(self, position: np.ndarray, wxyz: np.ndarray) -> None:
+        if self._frustum_handle is None:
+            return
+
+        self._frustum_handle.visible = True
+        self._frustum_handle.position = position
+        self._frustum_handle.wxyz = wxyz
 
     def _render_rgb(self, mj_data: mujoco.MjData) -> np.ndarray:
         self._renderer.disable_depth_rendering()
@@ -365,23 +391,107 @@ class StandaloneCameraViewer:
         self._renderer.disable_depth_rendering()
         return depth
 
-    def update(self, mj_data: mujoco.MjData) -> None:
-        self._rgb_handle.image = self._render_rgb(mj_data)
-
-        if self._depth_handle is not None and self._depth_scale_slider is not None:
-            depth = self._render_depth(mj_data)
-            depth_scale = max(float(self._depth_scale_slider.value), 0.01)
-            depth_vis = np.clip(depth / depth_scale, 0.0, 1.0)
-            depth_uint8 = (depth_vis * 255).astype(np.uint8)
-            self._depth_handle.image = np.repeat(depth_uint8[:, :, None], 3, axis=-1)
-
-        self._update_frustum(mj_data)
+    def update(self, mj_data: mujoco.MjData) -> VirtualCameraFrame:
+        position, wxyz = self._camera_pose(mj_data)
+        depth = self._render_depth(mj_data) if self.show_depth else None
+        frame = VirtualCameraFrame(
+            camera_id=self.spec.camera_id,
+            camera_name=self.spec.camera_name,
+            rgb=self._render_rgb(mj_data),
+            depth=depth,
+            position=position,
+            wxyz=wxyz,
+            timestamp_sec=time.time(),
+        )
+        self.latest_frame = frame
+        self._update_frustum(position, wxyz)
+        return frame
 
     def close(self) -> None:
         try:
             self._renderer.close()
         except Exception:
             pass
+
+
+class RealSenseCameraStream:
+    def __init__(self, config: RealSenseCameraConfig):
+        if rs is None:
+            raise RuntimeError(
+                "pyrealsense2 is not installed. Install it before enabling RealSense camera streaming."
+            )
+
+        self.config = config
+        self.latest_frame: RealSenseFrame | None = None
+        self._pipeline = rs.pipeline()
+        self._align = None
+        self._depth_scale = 1.0
+
+        pipeline_config = rs.config()
+        if self.config.serial_number:
+            pipeline_config.enable_device(self.config.serial_number)
+        pipeline_config.enable_stream(
+            rs.stream.color,
+            self.config.color_width,
+            self.config.color_height,
+            rs.format.bgr8,
+            self.config.fps,
+        )
+        if self.config.enable_depth:
+            pipeline_config.enable_stream(
+                rs.stream.depth,
+                self.config.depth_width,
+                self.config.depth_height,
+                rs.format.z16,
+                self.config.fps,
+            )
+
+        self._profile = self._pipeline.start(pipeline_config)
+        if self.config.enable_depth:
+            depth_sensor = self._profile.get_device().first_depth_sensor()
+            self._depth_scale = float(depth_sensor.get_depth_scale())
+            if self.config.align_depth_to_color:
+                self._align = rs.align(rs.stream.color)
+
+    def poll_frame(self) -> RealSenseFrame | None:
+        frames = self._pipeline.poll_for_frames()
+        if not frames:
+            return self.latest_frame
+
+        if self._align is not None:
+            frames = self._align.process(frames)
+
+        color_frame = frames.get_color_frame()
+        depth_frame = frames.get_depth_frame() if self.config.enable_depth else None
+        if not color_frame and not depth_frame:
+            return self.latest_frame
+
+        color = None
+        if color_frame:
+            color = np.asarray(color_frame.get_data())[:, :, ::-1].copy()
+
+        depth = None
+        if depth_frame:
+            depth = np.asarray(depth_frame.get_data(), dtype=np.float32) * self._depth_scale
+
+        frame = RealSenseFrame(
+            camera_name=self.config.camera_name,
+            serial_number=self.config.serial_number,
+            color=color,
+            depth=depth,
+            timestamp_sec=float(frames.get_timestamp()) / 1000.0,
+        )
+        self.latest_frame = frame
+        return frame
+
+    def close(self) -> None:
+        try:
+            self._pipeline.stop()
+        except Exception:
+            pass
+
+
+StandaloneCameraViewer = MujocoCameraStream
 
 
 class StandaloneMujocoScene:
@@ -395,8 +505,10 @@ class StandaloneMujocoScene:
         add_ground: bool = True,
         show_cameras: bool = True,
         show_depth: bool = True,
+        show_camera_frustums: bool = True,
         camera_width: int = DEFAULT_CAMERA_WIDTH,
         camera_height: int = DEFAULT_CAMERA_HEIGHT,
+        real_sense_configs: Sequence[RealSenseCameraConfig] | None = None,
     ):
         self.server = server
         self.mj_model = mj_model
@@ -406,8 +518,10 @@ class StandaloneMujocoScene:
         self.add_ground = add_ground
         self.show_cameras = show_cameras
         self.show_depth = show_depth
+        self.show_camera_frustums = show_camera_frustums
         self.camera_width = camera_width
         self.camera_height = camera_height
+        self.real_sense_configs = list(real_sense_configs or [])
 
         self.fixed_bodies_frame = None
         self.body_meshes = extract_body_meshes(
@@ -423,7 +537,11 @@ class StandaloneMujocoScene:
         ) if show_cameras else []
         self.body_handles: dict[int, object] = {}
         self.site_handles: dict[int, object] = {}
-        self.camera_viewers: list[StandaloneCameraViewer] = []
+        self.virtual_cameras: list[MujocoCameraStream] = []
+        self.camera_viewers = self.virtual_cameras
+        self.real_sense_cameras: list[RealSenseCameraStream] = []
+        self.latest_virtual_frames: dict[str, VirtualCameraFrame] = {}
+        self.latest_real_sense_frames: dict[str, RealSenseFrame] = {}
 
     @classmethod
     def create(
@@ -436,8 +554,10 @@ class StandaloneMujocoScene:
         add_ground: bool = True,
         show_cameras: bool = True,
         show_depth: bool = True,
+        show_camera_frustums: bool = True,
         camera_width: int = DEFAULT_CAMERA_WIDTH,
         camera_height: int = DEFAULT_CAMERA_HEIGHT,
+        real_sense_configs: Sequence[RealSenseCameraConfig] | None = None,
     ) -> "StandaloneMujocoScene":
         scene = cls(
             server,
@@ -447,8 +567,10 @@ class StandaloneMujocoScene:
             add_ground=add_ground,
             show_cameras=show_cameras,
             show_depth=show_depth,
+            show_camera_frustums=show_camera_frustums,
             camera_width=camera_width,
             camera_height=camera_height,
+            real_sense_configs=real_sense_configs,
         )
         scene._setup()
         return scene
@@ -464,7 +586,8 @@ class StandaloneMujocoScene:
         self._create_mesh_handles()
         self._add_fixed_sites()
         self._create_site_handles()
-        self._create_camera_viewers()
+        self._create_virtual_cameras()
+        self._create_real_sense_cameras()
         self.update_from_mjdata(self.mj_data)
 
     def _add_ground(self) -> None:
@@ -549,19 +672,29 @@ class StandaloneMujocoScene:
             )
             self.site_handles[site.site_id] = handle
 
-    def _create_camera_viewers(self) -> None:
+    def _create_virtual_cameras(self) -> None:
         for spec in self.camera_specs:
             try:
-                viewer = StandaloneCameraViewer(
+                viewer = MujocoCameraStream(
                     self.server,
                     self.mj_model,
                     spec,
                     show_depth=self.show_depth,
+                    show_frustum=self.show_camera_frustums,
                 )
             except Exception as exc:
                 print(f"[WARN] Failed to create camera viewer for {spec.camera_name}: {exc}")
                 continue
-            self.camera_viewers.append(viewer)
+            self.virtual_cameras.append(viewer)
+
+    def _create_real_sense_cameras(self) -> None:
+        for config in self.real_sense_configs:
+            try:
+                camera = RealSenseCameraStream(config)
+            except Exception as exc:
+                print(f"[WARN] Failed to create RealSense camera {config.camera_name}: {exc}")
+                continue
+            self.real_sense_cameras.append(camera)
 
     def update_from_mjdata(self, mj_data: mujoco.MjData) -> None:
         with self.server.atomic():
@@ -581,13 +714,29 @@ class StandaloneMujocoScene:
                     handle.position = np.asarray(mj_data.site_xpos[site_id], dtype=np.float32)
                     handle.wxyz = site_xquat[site_id]
 
-            for viewer in self.camera_viewers:
-                viewer.update(mj_data)
+            self.latest_virtual_frames = {}
+            for camera in self.virtual_cameras:
+                frame = camera.update(mj_data)
+                self.latest_virtual_frames[frame.camera_name] = frame
             self.server.flush()
 
+        self.latest_real_sense_frames = {}
+        for camera in self.real_sense_cameras:
+            frame = camera.poll_frame()
+            if frame is not None:
+                self.latest_real_sense_frames[frame.camera_name] = frame
+
+    def get_latest_virtual_frame(self, camera_name: str) -> VirtualCameraFrame | None:
+        return self.latest_virtual_frames.get(camera_name)
+
+    def get_latest_real_sense_frame(self, camera_name: str) -> RealSenseFrame | None:
+        return self.latest_real_sense_frames.get(camera_name)
+
     def close(self) -> None:
-        for viewer in self.camera_viewers:
-            viewer.close()
+        for camera in self.virtual_cameras:
+            camera.close()
+        for camera in self.real_sense_cameras:
+            camera.close()
 
 
 def show_body_meshes(
@@ -598,8 +747,10 @@ def show_body_meshes(
     add_ground: bool = True,
     show_cameras: bool = True,
     show_depth: bool = True,
+    show_camera_frustums: bool = True,
     camera_width: int = DEFAULT_CAMERA_WIDTH,
     camera_height: int = DEFAULT_CAMERA_HEIGHT,
+    real_sense_configs: Sequence[RealSenseCameraConfig] | None = None,
 ) -> None:
     server = viser.ViserServer(label="standalone-viser")
     scene = StandaloneMujocoScene.create(
@@ -610,13 +761,16 @@ def show_body_meshes(
         add_ground=add_ground,
         show_cameras=show_cameras,
         show_depth=show_depth,
+        show_camera_frustums=show_camera_frustums,
         camera_width=camera_width,
         camera_height=camera_height,
+        real_sense_configs=real_sense_configs,
     )
 
     print(
         f"Viewer ready with {len(scene.body_meshes)} body meshes, "
-        f"{len(scene.site_meshes)} sites, {len(scene.camera_viewers)} cameras. Press Ctrl+C to exit."
+        f"{len(scene.site_meshes)} sites, {len(scene.virtual_cameras)} virtual cameras, "
+        f"{len(scene.real_sense_cameras)} RealSense cameras. Press Ctrl+C to exit."
     )
     try:
         while True:
@@ -640,9 +794,16 @@ def main() -> None:
     parser.add_argument("--no-ground", action="store_true", help="Disable ground grid.")
     parser.add_argument("--no-sites", action="store_true", help="Disable site visualization.")
     parser.add_argument("--no-cameras", action="store_true", help="Disable camera visualization.")
-    parser.add_argument("--no-depth", action="store_true", help="Disable camera depth images.")
+    parser.add_argument("--no-depth", action="store_true", help="Disable virtual camera depth rendering.")
+    parser.add_argument("--hide-camera-frustums", action="store_true", help="Hide virtual camera frustums.")
     parser.add_argument("--camera-width", type=int, default=DEFAULT_CAMERA_WIDTH, help="Fallback camera render width.")
     parser.add_argument("--camera-height", type=int, default=DEFAULT_CAMERA_HEIGHT, help="Fallback camera render height.")
+    parser.add_argument("--realsense", action="store_true", help="Poll one connected RealSense camera.")
+    parser.add_argument("--realsense-serial", type=str, default=None, help="Optional RealSense serial number.")
+    parser.add_argument("--realsense-width", type=int, default=640, help="RealSense color/depth width.")
+    parser.add_argument("--realsense-height", type=int, default=480, help="RealSense color/depth height.")
+    parser.add_argument("--realsense-fps", type=int, default=30, help="RealSense stream FPS.")
+    parser.add_argument("--realsense-no-depth", action="store_true", help="Disable RealSense depth streaming.")
     parser.add_argument("--summary", action="store_true", help="Only print a summary; do not launch viser.")
     args = parser.parse_args()
 
@@ -671,6 +832,20 @@ def main() -> None:
     )
 
     if not args.summary:
+        real_sense_configs = None
+        if args.realsense:
+            real_sense_configs = [
+                RealSenseCameraConfig(
+                    camera_name="realsense",
+                    serial_number=args.realsense_serial,
+                    color_width=args.realsense_width,
+                    color_height=args.realsense_height,
+                    depth_width=args.realsense_width,
+                    depth_height=args.realsense_height,
+                    fps=args.realsense_fps,
+                    enable_depth=not args.realsense_no_depth,
+                )
+            ]
         show_body_meshes(
             mj_model,
             include_collision=args.collision,
@@ -678,8 +853,10 @@ def main() -> None:
             add_ground=not args.no_ground,
             show_cameras=not args.no_cameras,
             show_depth=not args.no_depth,
+            show_camera_frustums=not args.hide_camera_frustums,
             camera_width=args.camera_width,
             camera_height=args.camera_height,
+            real_sense_configs=real_sense_configs,
         )
 
 

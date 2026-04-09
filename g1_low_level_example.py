@@ -1,5 +1,6 @@
 import time
 import sys
+import os
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
@@ -17,10 +18,17 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from standalone_viser_mesh import StandaloneMujocoScene
+from standalone_viser_mesh import RealSenseCameraConfig, StandaloneMujocoScene
 import viser
 
 MODEL = "/media/lhx/E/share/project/humaniod_ws/unitree-deploy/robot_model/g1.xml"
+ENABLE_REALSENSE = os.getenv("REALSENSE_ENABLED", "0").lower() in {"1", "true", "yes"}
+REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL")
+REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "realsense")
+REALSENSE_WIDTH = int(os.getenv("REALSENSE_WIDTH", "640"))
+REALSENSE_HEIGHT = int(os.getenv("REALSENSE_HEIGHT", "480"))
+REALSENSE_FPS = int(os.getenv("REALSENSE_FPS", "30"))
+REALSENSE_ENABLE_DEPTH = os.getenv("REALSENSE_ENABLE_DEPTH", "1").lower() not in {"0", "false", "no"}
 
 G1_NUM_MOTOR = 29
 
@@ -116,7 +124,25 @@ class Custom:
         self.data.qpos[:] = np.zeros(self.model.nq)
 
         self.viser_server = viser.ViserServer()
-        self.viser_scene = StandaloneMujocoScene.create(self.viser_server, self.model)  
+        real_sense_configs = None
+        if ENABLE_REALSENSE:
+            real_sense_configs = [
+                RealSenseCameraConfig(
+                    camera_name=REALSENSE_CAMERA_NAME,
+                    serial_number=REALSENSE_SERIAL,
+                    color_width=REALSENSE_WIDTH,
+                    color_height=REALSENSE_HEIGHT,
+                    depth_width=REALSENSE_WIDTH,
+                    depth_height=REALSENSE_HEIGHT,
+                    fps=REALSENSE_FPS,
+                    enable_depth=REALSENSE_ENABLE_DEPTH,
+                )
+            ]
+        self.viser_scene = StandaloneMujocoScene.create(
+            self.viser_server,
+            self.model,
+            real_sense_configs=real_sense_configs,
+        )
 
         # create subscriber # 
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
