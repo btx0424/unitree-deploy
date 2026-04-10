@@ -425,15 +425,15 @@ class RealSenseCameraStream:
         self.latest_frame = frame
         return frame
 
-    def update_visualization(self, mj_data: mujoco.MjData, frame: RealSenseFrame | None) -> None:
+    def update_visualization(self, mj_data: mujoco.MjData) -> None:
         if self._frustum_handle is not None and self._pose_camera_id is not None:
             position, wxyz = _camera_pose(mj_data, self._pose_camera_id)
             self._frustum_handle.visible = True
             self._frustum_handle.position = position
             self._frustum_handle.wxyz = wxyz
 
-        if self._gui_image_handle is not None and frame is not None and frame.color is not None:
-            self._gui_image_handle.image = frame.color
+        if self._gui_image_handle is not None and self.latest_frame is not None and self.latest_frame.color is not None:
+            self._gui_image_handle.image = self.latest_frame.color
 
     def close(self) -> None:
         try:
@@ -475,7 +475,6 @@ class StandaloneMujocoScene:
         self.body_handles: dict[int, object] = {}
         self.site_handles: dict[int, object] = {}
         self.real_sense_cameras: list[RealSenseCameraStream] = []
-        self.latest_real_sense_frames: dict[str, RealSenseFrame] = {}
 
     @classmethod
     def create(
@@ -629,17 +628,17 @@ class StandaloneMujocoScene:
                     handle.position = np.asarray(mj_data.site_xpos[site_id], dtype=np.float32)
                     handle.wxyz = site_xquat[site_id]
 
-            self.latest_real_sense_frames = {}
             for camera in self.real_sense_cameras:
-                frame = camera.poll_frame()
-                camera.update_visualization(mj_data, frame)
-                if frame is not None:
-                    self.latest_real_sense_frames[frame.camera_name] = frame
+                camera.poll_frame()
+                camera.update_visualization(mj_data)
 
             self.server.flush()
 
     def get_latest_real_sense_frame(self, camera_name: str) -> RealSenseFrame | None:
-        return self.latest_real_sense_frames.get(camera_name)
+        for camera in self.real_sense_cameras:
+            if camera.config.camera_name == camera_name:
+                return camera.latest_frame
+        return None
 
     def close(self) -> None:
         for camera in self.real_sense_cameras:
