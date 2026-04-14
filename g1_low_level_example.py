@@ -22,7 +22,7 @@ import viser
 
 MODEL = "/home/unitree/lhx/humaniod_deploy_ws/unitree-deploy/robot_model/g1.xml"
 ENABLE_REALSENSE = os.getenv("REALSENSE_ENABLED", "0").lower() in {"1", "true", "yes"}
-REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL")
+REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL", "140122071098")
 REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "d435_head")
 REALSENSE_WIDTH = int(os.getenv("REALSENSE_WIDTH", "640"))
 REALSENSE_HEIGHT = int(os.getenv("REALSENSE_HEIGHT", "480"))
@@ -101,6 +101,19 @@ class Custom:
         self.low_state = None 
         self.update_mode_machine_ = False
         self.crc = CRC()
+        self.msc = None
+        self.lowcmd_publisher_ = None
+        self.lowstate_subscriber = None
+        self.odomstate_subscriber = None
+        self.model = None
+        self.data = None
+        self.viser_server = None
+        self.viser_scene = None
+        self.lowCmdWriteThreadPtr = None
+        self.timerPtr = None
+        self._control_thread_started = False
+        self._visualize_thread_started = False
+        self._closed = False
 
     def Init(self):
         self.msc = MotionSwitcherClient()
@@ -162,9 +175,11 @@ class Custom:
 
         if self.update_mode_machine_ == True:
             self.lowCmdWriteThreadPtr.Start()
+            self._control_thread_started = True
 
         self.timerPtr = RecurrentThread(interval=0.05, target=self.Visualize, name="visualize")
         self.timerPtr.Start()
+        self._visualize_thread_started = True
 
     def OdomStateHandler(self, msg: SportModeState_):
         self.odom_state = msg
@@ -256,6 +271,53 @@ class Custom:
         self.viser_scene.update_from_mjdata(self.data)
         self.time_prev = time.time()
 
+    def Close(self):
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._visualize_thread_started and self.timerPtr is not None:
+            try:
+                self.timerPtr.Wait(1.0)
+            except Exception as exc:
+                print(f"[WARN] Failed to stop visualize thread: {exc}")
+
+        if self._control_thread_started and self.lowCmdWriteThreadPtr is not None:
+            try:
+                self.lowCmdWriteThreadPtr.Wait(1.0)
+            except Exception as exc:
+                print(f"[WARN] Failed to stop control thread: {exc}")
+
+        if self.lowstate_subscriber is not None:
+            try:
+                self.lowstate_subscriber.Close()
+            except Exception as exc:
+                print(f"[WARN] Failed to close lowstate subscriber: {exc}")
+
+        if self.odomstate_subscriber is not None:
+            try:
+                self.odomstate_subscriber.Close()
+            except Exception as exc:
+                print(f"[WARN] Failed to close odomstate subscriber: {exc}")
+
+        if self.lowcmd_publisher_ is not None:
+            try:
+                self.lowcmd_publisher_.Close()
+            except Exception as exc:
+                print(f"[WARN] Failed to close lowcmd publisher: {exc}")
+
+        if self.viser_scene is not None:
+            try:
+                self.viser_scene.close()
+            except Exception as exc:
+                print(f"[WARN] Failed to close viser scene: {exc}")
+
+        if self.viser_server is not None:
+            try:
+                self.viser_server.stop()
+            except Exception as exc:
+                print(f"[WARN] Failed to stop viser server: {exc}")
+
 if __name__ == '__main__':
 
     print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
@@ -267,8 +329,13 @@ if __name__ == '__main__':
         ChannelFactoryInitialize(0)
 
     custom = Custom()
-    custom.Init()
-    custom.Start()  
+    try:
+        custom.Init()
+        custom.Start()
 
-    while True:        
-        time.sleep(1)
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[INFO] Shutting down...")
+    finally:
+        custom.Close()

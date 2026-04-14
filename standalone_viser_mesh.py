@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import argparse
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -18,10 +15,6 @@ try:
     import pyrealsense2 as rs
 except ImportError:
     rs = None
-
-
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_XML = ROOT / "unitree-deploy" / "robot_model" / "g1.xml"
 
 
 @dataclass
@@ -67,6 +60,8 @@ class RealSenseCameraConfig:
     fps: int = 30
     enable_depth: bool = True
     align_depth_to_color: bool = True
+    depth_visualization_min_m: float = 0.1
+    depth_visualization_max_m: float = 3.0
     frustum_scale: float = 0.15
     jpeg_quality: int | None = 80
 
@@ -104,6 +99,31 @@ def _camera_pose(mj_data: mujoco.MjData, camera_id: int) -> tuple[np.ndarray, np
     cam_pos = np.asarray(mj_data.cam_xpos[camera_id], dtype=np.float32)
     cam_mat = np.asarray(mj_data.cam_xmat[camera_id], dtype=np.float32).reshape(3, 3)
     return _opencv_pose_from_mujoco_matrix(cam_pos, cam_mat)
+
+
+def _depth_to_display_image(
+    depth_m: np.ndarray,
+    *,
+    min_depth_m: float,
+    max_depth_m: float,
+) -> np.ndarray:
+    if depth_m.size == 0:
+        return np.zeros((*depth_m.shape, 3), dtype=np.uint8)
+
+    if max_depth_m <= min_depth_m:
+        max_depth_m = min_depth_m + 1e-3
+
+    valid = np.isfinite(depth_m) & (depth_m > 0.0)
+    normalized = np.clip((depth_m - min_depth_m) / (max_depth_m - min_depth_m), 0.0, 1.0)
+    normalized = 1.0 - normalized
+
+    red = np.clip(1.5 - np.abs(4.0 * normalized - 3.0), 0.0, 1.0)
+    green = np.clip(1.5 - np.abs(4.0 * normalized - 2.0), 0.0, 1.0)
+    blue = np.clip(1.5 - np.abs(4.0 * normalized - 1.0), 0.0, 1.0)
+    image = np.stack([red, green, blue], axis=-1)
+    image = (255.0 * image).astype(np.uint8)
+    image[~valid] = 0
+    return image
 
 
 def _is_fixed_body(mj_model: mujoco.MjModel, body_id: int) -> bool:
@@ -287,15 +307,6 @@ def extract_site_meshes(mj_model: mujoco.MjModel) -> list[SiteMesh]:
             )
         )
     return site_meshes
-
-
-def load_model(xml: str) -> mujoco.MjModel:
-    xml_path = Path(xml).expanduser().resolve()
-    if not xml_path.exists():
-        raise FileNotFoundError(f"Model file not found: {xml_path}")
-    return mujoco.MjModel.from_xml_path(str(xml_path))
-
-
 class RealSenseCameraStream:
     def __init__(
         self,
@@ -321,7 +332,8 @@ class RealSenseCameraStream:
         self._pose_camera_id: int | None = None
         self._frustum_handle = None
         self._gui_folder = None
-        self._gui_image_handle = None
+        self._gui_rgb_image_handle = None
+        self._gui_depth_image_handle = None
 
         pipeline_config = rs.config()
         if self.config.serial_number:
@@ -386,13 +398,22 @@ class RealSenseCameraStream:
                 f"Camera: {self.config.camera_name}",
                 expand_by_default=True,
             )
-            placeholder = np.zeros((self._color_height, self._color_width, 3), dtype=np.uint8)
+            rgb_placeholder = np.zeros((self._color_height, self._color_width, 3), dtype=np.uint8)
             with self._gui_folder:
-                self._gui_image_handle = self.server.gui.add_image(
-                    placeholder,
+                self._gui_rgb_image_handle = self.server.gui.add_image(
+                    rgb_placeholder,
                     label="RGB",
                     jpeg_quality=self.config.jpeg_quality,
                 )
+                if self.config.enable_depth:
+                    depth_height = self._color_height if self._align is not None else self.config.depth_height
+                    depth_width = self._color_width if self._align is not None else self.config.depth_width
+                    depth_placeholder = np.zeros((depth_height, depth_width, 3), dtype=np.uint8)
+                    self._gui_depth_image_handle = self.server.gui.add_image(
+                        depth_placeholder,
+                        label="Depth",
+                        jpeg_quality=self.config.jpeg_quality,
+                    )
 
     def poll_frame(self) -> RealSenseFrame | None:
         frames = self._pipeline.poll_for_frames()
@@ -432,8 +453,14 @@ class RealSenseCameraStream:
             self._frustum_handle.position = position
             self._frustum_handle.wxyz = wxyz
 
-        if self._gui_image_handle is not None and self.latest_frame is not None and self.latest_frame.color is not None:
-            self._gui_image_handle.image = self.latest_frame.color
+        if self._gui_rgb_image_handle is not None and self.latest_frame is not None and self.latest_frame.color is not None:
+            self._gui_rgb_image_handle.image = self.latest_frame.color
+        if self._gui_depth_image_handle is not None and self.latest_frame is not None and self.latest_frame.depth is not None:
+            self._gui_depth_image_handle.image = _depth_to_display_image(
+                self.latest_frame.depth,
+                min_depth_m=self.config.depth_visualization_min_m,
+                max_depth_m=self.config.depth_visualization_max_m,
+            )
 
     def close(self) -> None:
         try:
@@ -643,107 +670,3 @@ class StandaloneMujocoScene:
     def close(self) -> None:
         for camera in self.real_sense_cameras:
             camera.close()
-
-
-def show_body_meshes(
-    mj_model: mujoco.MjModel,
-    *,
-    include_collision: bool = False,
-    show_sites: bool = True,
-    add_ground: bool = True,
-    show_camera_frustums: bool = True,
-    real_sense_configs: Sequence[RealSenseCameraConfig] | None = None,
-) -> None:
-    server = viser.ViserServer(label="standalone-viser")
-    scene = StandaloneMujocoScene.create(
-        server,
-        mj_model,
-        include_collision=include_collision,
-        show_sites=show_sites,
-        add_ground=add_ground,
-        show_camera_frustums=show_camera_frustums,
-        real_sense_configs=real_sense_configs,
-    )
-
-    print(
-        f"Viewer ready with {len(scene.body_meshes)} body meshes, "
-        f"{len(scene.site_meshes)} sites, "
-        f"{len(scene.real_sense_cameras)} RealSense cameras. Press Ctrl+C to exit."
-    )
-    try:
-        while True:
-            time.sleep(1.0)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        scene.close()
-        server.stop()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Minimal standalone viser mesh viewer for MuJoCo models.")
-    parser.add_argument(
-        "--xml",
-        type=str,
-        default=str(DEFAULT_XML),
-        help=f"Path to a MuJoCo XML file. Default: {DEFAULT_XML}",
-    )
-    parser.add_argument("--collision", action="store_true", help="Include collision geoms.")
-    parser.add_argument("--no-ground", action="store_true", help="Disable ground grid.")
-    parser.add_argument("--no-sites", action="store_true", help="Disable site visualization.")
-    parser.add_argument("--hide-camera-frustums", action="store_true", help="Hide camera frustums.")
-    parser.add_argument("--realsense", action="store_true", help="Poll one connected RealSense camera.")
-    parser.add_argument("--realsense-serial", type=str, default=None, help="Optional RealSense serial number.")
-    parser.add_argument("--realsense-width", type=int, default=640, help="RealSense color/depth width.")
-    parser.add_argument("--realsense-height", type=int, default=480, help="RealSense color/depth height.")
-    parser.add_argument("--realsense-fps", type=int, default=30, help="RealSense stream FPS.")
-    parser.add_argument("--realsense-no-depth", action="store_true", help="Disable RealSense depth streaming.")
-    parser.add_argument("--summary", action="store_true", help="Only print a summary; do not launch viser.")
-    args = parser.parse_args()
-
-    mj_model = load_model(args.xml)
-    body_meshes = extract_body_meshes(
-        mj_model,
-        include_collision=args.collision,
-        skip_plane_geoms=not args.no_ground,
-    )
-    site_meshes = extract_site_meshes(mj_model) if not args.no_sites else []
-
-    vertices = sum(int(len(body.mesh.vertices)) for body in body_meshes)
-    faces = sum(int(len(body.mesh.faces)) for body in body_meshes)
-    fixed = sum(int(body.fixed) for body in body_meshes)
-    fixed_sites = sum(int(site.fixed) for site in site_meshes)
-    print(
-        f"bodies={len(body_meshes)} fixed={fixed} dynamic={len(body_meshes) - fixed} "
-        f"sites={len(site_meshes)} fixed_sites={fixed_sites} dynamic_sites={len(site_meshes) - fixed_sites} "
-        f"model_cameras={int(mj_model.ncam)} "
-        f"vertices={vertices} faces={faces}"
-    )
-
-    if not args.summary:
-        real_sense_configs = None
-        if args.realsense:
-            real_sense_configs = [
-                RealSenseCameraConfig(
-                    camera_name="realsense",
-                    serial_number=args.realsense_serial,
-                    color_width=args.realsense_width,
-                    color_height=args.realsense_height,
-                    depth_width=args.realsense_width,
-                    depth_height=args.realsense_height,
-                    fps=args.realsense_fps,
-                    enable_depth=not args.realsense_no_depth,
-                )
-            ]
-        show_body_meshes(
-            mj_model,
-            include_collision=args.collision,
-            show_sites=not args.no_sites,
-            add_ground=not args.no_ground,
-            show_camera_frustums=not args.hide_camera_frustums,
-            real_sense_configs=real_sense_configs,
-        )
-
-
-if __name__ == "__main__":
-    main()
