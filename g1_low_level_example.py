@@ -1,9 +1,10 @@
+import argparse
 import time
-import sys
 import os
+from dataclasses import dataclass
 
-from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
-from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher
+from unitree_sdk2py.core.channel import ChannelSubscriber
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
@@ -23,13 +24,15 @@ import viser
 from pathlib import Path
 
 MODEL = Path(__file__).parent / "robot_model" / "g1.xml"
-ENABLE_REALSENSE = os.getenv("REALSENSE_ENABLED", "0").lower() in {"1", "true", "yes"}
-REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL", "140122071098")
-REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "d435_head")
-REALSENSE_WIDTH = int(os.getenv("REALSENSE_WIDTH", "640"))
-REALSENSE_HEIGHT = int(os.getenv("REALSENSE_HEIGHT", "480"))
-REALSENSE_FPS = int(os.getenv("REALSENSE_FPS", "30"))
-REALSENSE_ENABLE_DEPTH = os.getenv("REALSENSE_ENABLE_DEPTH", "1").lower() not in {"0", "false", "no"}
+DEFAULT_MODE = os.getenv("G1_RUN_MODE", "sim")
+DEFAULT_ENABLE_CAMERA = os.getenv("ENABLE_CAMERA", "0").lower() not in {"0", "false", "no"}
+DEFAULT_REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL", "140122071098")
+DEFAULT_REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "d435_head")
+DEFAULT_REALSENSE_POSE_CAMERA_NAME = os.getenv("REALSENSE_POSE_CAMERA_NAME", "d435_head")
+DEFAULT_REALSENSE_WIDTH = int(os.getenv("REALSENSE_WIDTH", "640"))
+DEFAULT_REALSENSE_HEIGHT = int(os.getenv("REALSENSE_HEIGHT", "480"))
+DEFAULT_REALSENSE_FPS = int(os.getenv("REALSENSE_FPS", "30"))
+DEFAULT_REALSENSE_ENABLE_DEPTH = os.getenv("REALSENSE_ENABLE_DEPTH", "1").lower() not in {"0", "false", "no"}
 
 G1_NUM_MOTOR = 29
 
@@ -91,8 +94,17 @@ class Mode:
     PR = 0  # Series Control for Pitch/Roll Joints
     AB = 1  # Parallel Control for A/B Joints
 
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    mode: str
+    net: str | None
+    enable_camera: bool
+
+
 class Custom:
-    def __init__(self):
+    def __init__(self, config: RuntimeConfig):
+        self.config = config
         self.time_ = 0.0
         self.control_dt_ = 0.002  # [2ms]
         self.duration_ = 3.0    # [3 s]
@@ -118,15 +130,16 @@ class Custom:
         self._closed = False
 
     def Init(self):
-        # self.msc = MotionSwitcherClient()
-        # self.msc.SetTimeout(5.0)
-        # self.msc.Init()
+        if self.config.mode == "real":
+            self.msc = MotionSwitcherClient()
+            self.msc.SetTimeout(5.0)
+            self.msc.Init()
 
-        # status, result = self.msc.CheckMode()
-        # while result['name']:
-        #     self.msc.ReleaseMode()
-        #     status, result = self.msc.CheckMode()
-        #     time.sleep(1)
+            status, result = self.msc.CheckMode()
+            while result["name"]:
+                self.msc.ReleaseMode()
+                status, result = self.msc.CheckMode()
+                time.sleep(1)
 
         # create publisher #
         self.lowcmd_publisher_ = ChannelPublisher("rt/lowcmd", LowCmd_)
@@ -138,17 +151,18 @@ class Custom:
 
         self.viser_server = viser.ViserServer()
         real_sense_configs = None
-        if ENABLE_REALSENSE:
+        if self.config.enable_camera:
             real_sense_configs = [
                 RealSenseCameraConfig(
-                    camera_name=REALSENSE_CAMERA_NAME,
-                    serial_number=REALSENSE_SERIAL,
-                    color_width=REALSENSE_WIDTH,
-                    color_height=REALSENSE_HEIGHT,
-                    depth_width=REALSENSE_WIDTH,
-                    depth_height=REALSENSE_HEIGHT,
-                    fps=REALSENSE_FPS,
-                    enable_depth=REALSENSE_ENABLE_DEPTH,
+                    camera_name=DEFAULT_REALSENSE_CAMERA_NAME,
+                    pose_camera_name=DEFAULT_REALSENSE_POSE_CAMERA_NAME,
+                    serial_number=DEFAULT_REALSENSE_SERIAL,
+                    color_width=DEFAULT_REALSENSE_WIDTH,
+                    color_height=DEFAULT_REALSENSE_HEIGHT,
+                    depth_width=DEFAULT_REALSENSE_WIDTH,
+                    depth_height=DEFAULT_REALSENSE_HEIGHT,
+                    fps=DEFAULT_REALSENSE_FPS,
+                    enable_depth=DEFAULT_REALSENSE_ENABLE_DEPTH,
                 )
             ]
         self.viser_scene = StandaloneMujocoScene.create(
@@ -162,9 +176,10 @@ class Custom:
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
         self.lowstate_subscriber.Init(self.LowStateHandler, 10)
 
-        # create subscriber for estimated state (optional, for visualization) #
-        self.odomstate_subscriber = ChannelSubscriber("rt/odommodestate", SportModeState_)
-        self.odomstate_subscriber.Init(self.OdomStateHandler, 10)
+        if self.config.mode == "real":
+            # create subscriber for estimated state (optional, for visualization) #
+            self.odomstate_subscriber = ChannelSubscriber("rt/odommodestate", SportModeState_)
+            self.odomstate_subscriber.Init(self.OdomStateHandler, 10)
 
         # self.time_prev = 0.0
 
@@ -267,6 +282,9 @@ class Custom:
         self.lowcmd_publisher_.Write(self.low_cmd)
 
     def Visualize(self):
+        if self.viser_scene is None:
+            return
+
         # if time.time() - self.time_prev > 0.05:  # visualize at 20 Hz
         self.data.qpos[7:7+G1_NUM_MOTOR] = [self.low_state.motor_state[i].q for i in range(G1_NUM_MOTOR)]
         mujoco.mj_forward(self.model, self.data)
@@ -320,17 +338,44 @@ class Custom:
             except Exception as exc:
                 print(f"[WARN] Failed to stop viser server: {exc}")
 
+
+def parse_args() -> RuntimeConfig:
+    parser = argparse.ArgumentParser(description="G1 low-level example for real robot or simulation.")
+    parser.add_argument("--net", default='lo', help="Optional DDS network interface.")
+    parser.add_argument(
+        "--mode",
+        choices=("real", "sim"),
+        default=DEFAULT_MODE,
+        help="Run against a real robot or the sim bridge.",
+    )
+    parser.add_argument(
+        "--camera",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_ENABLE_CAMERA,
+        help="Enable or disable camera-related visualization and capture.",
+    )
+    args = parser.parse_args()
+    return RuntimeConfig(
+        mode=args.mode,
+        net=args.net,
+        enable_camera=bool(args.camera),
+    )
+
 if __name__ == '__main__':
+    config = parse_args()
 
-    print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
-    input("Press Enter to continue...")
+    if config.mode == "real":
+        print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
+        input("Press Enter to continue...")
+    else:
+        print("[INFO] Running in simulation mode.")
 
-    if len(sys.argv)>1:
-        ChannelFactoryInitialize(0, sys.argv[1])
+    if config.net:
+        ChannelFactoryInitialize(0, config.net)
     else:
         ChannelFactoryInitialize(0)
 
-    custom = Custom()
+    custom = Custom(config)
     try:
         custom.Init()
         custom.Start()
