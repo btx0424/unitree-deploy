@@ -20,7 +20,9 @@ import mujoco
 from standalone_viser_mesh import RealSenseCameraConfig, StandaloneMujocoScene
 import viser
 
-MODEL = "/home/unitree/lhx/humaniod_deploy_ws/unitree-deploy/robot_model/g1.xml"
+from pathlib import Path
+
+MODEL = Path(__file__).parent / "robot_model" / "g1.xml"
 ENABLE_REALSENSE = os.getenv("REALSENSE_ENABLED", "0").lower() in {"1", "true", "yes"}
 REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL", "140122071098")
 REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "d435_head")
@@ -116,21 +118,21 @@ class Custom:
         self._closed = False
 
     def Init(self):
-        self.msc = MotionSwitcherClient()
-        self.msc.SetTimeout(5.0)
-        self.msc.Init()
+        # self.msc = MotionSwitcherClient()
+        # self.msc.SetTimeout(5.0)
+        # self.msc.Init()
 
-        status, result = self.msc.CheckMode()
-        while result['name']:
-            self.msc.ReleaseMode()
-            status, result = self.msc.CheckMode()
-            time.sleep(1)
+        # status, result = self.msc.CheckMode()
+        # while result['name']:
+        #     self.msc.ReleaseMode()
+        #     status, result = self.msc.CheckMode()
+        #     time.sleep(1)
 
         # create publisher #
         self.lowcmd_publisher_ = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher_.Init()
 
-        self.model = mujoco.MjModel.from_xml_path(MODEL)
+        self.model = mujoco.MjModel.from_xml_path(str(MODEL))
         self.data = mujoco.MjData(self.model)
         self.data.qpos[:] = np.zeros(self.model.nq)
 
