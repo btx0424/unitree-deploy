@@ -1145,6 +1145,15 @@ wheels = [
 ]
 
 [[package]]
+name = "sshkeyboard"
+version = "2.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/7b/d78e6ade4bb4680d0a610ed02047c4de04db62de8864193bf842c59c47cb/sshkeyboard-2.3.1.tar.gz", hash = "sha256:3273be5b2fde7f8d2ea075d40e1981104ac0928d7b77a848756f08d0e66a3d9f", size = 20296, upload-time = "2021-10-28T11:37:08.07Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ea/b6/d24c6184348a91386e5ca5fe3e46668ef978dd694ff98574ef0dd5904522/sshkeyboard-2.3.1-py3-none-any.whl", hash = "sha256:05ec2cb116bd9c4a7c17d7add4a5af74e12eb2add24c110608cb90f6812692f9", size = 12870, upload-time = "2021-10-28T11:37:05.566Z" },
+]
+
+[[package]]
 name = "svg-path"
 version = "7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1214,6 +1223,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "mujoco" },
     { name = "scipy" },
+    { name = "sshkeyboard" },
     { name = "viser" },
 ]
 
@@ -1221,6 +1231,7 @@ dependencies = [
 requires-dist = [
     { name = "mujoco", specifier = ">=3.6.0" },
     { name = "scipy", specifier = ">=1.17.1" },
+    { name = "sshkeyboard" },
     { name = "viser", specifier = ">=1.0.26" },
 ]
 
