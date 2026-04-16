@@ -13,6 +13,8 @@ uv pip install -e .
 ```
 uv run python unitree-deploy/sim_bridge.py
 
+uv run python unitree-deploy/deploy.py
+
 uv run python unitree-deploy/g1_low_level_example.py
 ```
 ## Sim 按键说明

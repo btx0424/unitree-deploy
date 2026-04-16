@@ -41,13 +41,11 @@ DEFAULT_BAND_MIN_HEIGHT = 0.8
 DEFAULT_BAND_MAX_HEIGHT = 2.2
 DEFAULT_BAND_MAX_FORCE = 400.0
 DEFAULT_BASE_QUAT = np.array([0.70710678, 0.0, 0.0, 0.70710678], dtype=np.float64)
-FALLBACK_KP = np.full(29, 40.0, dtype=np.float64)
-FALLBACK_KD = np.full(29, 1.0, dtype=np.float64)
-FALLBACK_QPOS = np.zeros(29, dtype=np.float64)
-ZERO_TORQUE_KD = np.full(29, 1.0, dtype=np.float64)
-CONTROL_MODE_ZERO_TORQUE = "zero_torque"
-CONTROL_MODE_DEFAULT_POSE = "default_pose"
-CONTROL_MODE_EXTERNAL_CMD = "external_cmd"
+DEFAULT_REMOTE_KEYMAP = {
+    "b": (3, 0),  # keyboard b -> remote A
+    "r": (3, 2),  # keyboard r -> remote X
+    "m": (2, 2),  # keyboard m -> remote Start
+}
 
 
 class LoopTimer:
@@ -102,10 +100,10 @@ class SimBridge:
         self.band_max_force = DEFAULT_BAND_MAX_FORCE
         self.is_alive = True
         self.command_received = False
+        self.cleanup_done = False
         self.state_tick = 1
         self.mode_machine = 0
         self.mode_pr = 0
-        self.control_mode = CONTROL_MODE_ZERO_TORQUE
 
         self.model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
         self.model.opt.timestep = 1.0 / self.sim_freq
@@ -118,9 +116,7 @@ class SimBridge:
         self.base_qpos = np.array(
             [0.0, 0.0, DEFAULT_BASE_HEIGHT, *DEFAULT_BASE_QUAT], dtype=np.float64
         )
-        initial_qpos = FALLBACK_QPOS[: self.num_motor].copy()
-        if initial_qpos.shape[0] != self.num_motor:
-            initial_qpos = np.zeros(self.num_motor, dtype=np.float64)
+        initial_qpos = np.zeros(self.num_motor, dtype=np.float64)
 
         self.data.qpos[:7] = self.base_qpos
         self.data.qpos[7 : 7 + self.num_motor] = initial_qpos
@@ -129,12 +125,8 @@ class SimBridge:
 
         self.target_q = self.data.qpos[7 : 7 + self.num_motor].copy()
         self.target_dq = np.zeros(self.num_motor, dtype=np.float64)
-        self.kp = FALLBACK_KP[: self.num_motor].copy()
-        self.kd = FALLBACK_KD[: self.num_motor].copy()
-        if self.kp.shape[0] != self.num_motor:
-            self.kp = FALLBACK_KP[: self.num_motor].copy()
-        if self.kd.shape[0] != self.num_motor:
-            self.kd = FALLBACK_KD[: self.num_motor].copy()
+        self.kp = np.zeros(self.num_motor, dtype=np.float64)
+        self.kd = np.zeros(self.num_motor, dtype=np.float64)
         self.tau_ff = np.zeros(self.num_motor, dtype=np.float64)
         self.motor_enable = np.zeros(self.num_motor, dtype=bool)
 
@@ -151,6 +143,7 @@ class SimBridge:
         self.band_anchor_positions: np.ndarray | None = None
         self.band_target_height = 0.0
         self.pressed_keys: set[str] = set()
+        self.remote_keymap = DEFAULT_REMOTE_KEYMAP.copy()
 
         self.imu_ang_vel_adr, self.imu_ang_vel_dim = self._resolve_sensor_slice(
             "imu_ang_vel"
@@ -192,8 +185,6 @@ class SimBridge:
         signal.signal(signal.SIGINT, self.close)
         signal.signal(signal.SIGTERM, self.close)
 
-        self._set_zero_torque_mode(log=False)
-
     def _resolve_sensor_slice(self, sensor_name: str):
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_name)
         if sid < 0:
@@ -223,73 +214,31 @@ class SimBridge:
 
         print(f"[sim_bridge] band height -> {target_height:.3f} m")
 
-    def _set_zero_torque_mode(self, *, log: bool = True) -> None:
-        zero_torque_kd = ZERO_TORQUE_KD[: self.num_motor]
-        with self.cmd_lock:
-            self.control_mode = CONTROL_MODE_ZERO_TORQUE
-            self.target_q.fill(0.0)
-            self.target_dq.fill(0.0)
-            self.kp.fill(0.0)
-            self.kd[:] = zero_torque_kd
-            self.tau_ff.fill(0.0)
-            self.motor_enable.fill(True)
-            self.command_received = False
-    
-        if log:
-            print("[sim_bridge] control mode -> zero torque with damping")
-
-    def _set_default_pose_mode(self) -> None:
-        default_qpos = FALLBACK_QPOS[: self.num_motor]
-        default_kp = FALLBACK_KP[: self.num_motor]
-        default_kd = FALLBACK_KD[: self.num_motor]
-
-        with self.cmd_lock:
-            self.control_mode = CONTROL_MODE_DEFAULT_POSE
-            self.target_q[:] = default_qpos
-            self.target_dq.fill(0.0)
-            self.kp[:] = default_kp
-            self.kd[:] = default_kd
-            self.tau_ff.fill(0.0)
-            self.motor_enable.fill(True)
-            self.command_received = False
-
-        print("[sim_bridge] control mode -> default pose damping")
-
-    def _set_external_command_mode(self) -> None:
-        with self.cmd_lock:
-            self.control_mode = CONTROL_MODE_EXTERNAL_CMD
-            self.target_q.fill(0.0)
-            self.target_dq.fill(0.0)
-            self.kp.fill(0.0)
-            self.kd.fill(0.0)
-            self.tau_ff.fill(0.0)
-            self.motor_enable.fill(False)
-            self.command_received = False
-
-        print("[sim_bridge] control mode -> external lowcmd")
-
     def _release_band(self) -> None:
         with self.band_lock:
             self.band_enabled = False
 
         print("[sim_bridge] suspension bands released")
 
-    def _restore_band_zero_torque(self) -> None:
+    def _restore_band(self) -> None:
         with self.band_lock:
-            has_band = self.band_anchor_positions is not None
-            if has_band:
-                self.band_enabled = True
-                band_height = float(np.mean(self.band_anchor_positions[:, 2]))
-            else:
-                band_height = None
+            if self.band_anchor_positions is None:
+                print("[sim_bridge] suspension bands unavailable")
+                return
+            self.band_enabled = True
+            target_height = self.band_target_height
 
-        self._set_zero_torque_mode(log=False)
+        print(f"[sim_bridge] suspension bands restored at z={target_height:.3f} m")
 
-        if band_height is None:
-            print("[sim_bridge] control mode -> zero torque (band unavailable)")
-            return
+    def _build_wireless_remote(self) -> list[int]:
+        wireless_remote = [0] * 40
+        with self.keyboard_state_lock:
+            pressed_keys = self.pressed_keys.copy()
 
-        print(f"[sim_bridge] restored suspension at z={band_height:.3f} m, control mode -> zero torque")
+        for key, (byte_index, bit_index) in self.remote_keymap.items():
+            if key in pressed_keys:
+                wireless_remote[byte_index] |= 1 << bit_index
+        return wireless_remote
 
     def _on_keyboard_press(self, key: str) -> None:
         normalized_key = key.lower()
@@ -302,14 +251,10 @@ class SimBridge:
             self._adjust_band_height(self.band_height_step)
         elif normalized_key == "down":
             self._adjust_band_height(-self.band_height_step)
-        elif normalized_key == "b":
-            self._set_default_pose_mode()
-        elif normalized_key == "m":
-            self._set_external_command_mode()
         elif normalized_key == "n":
             self._release_band()
         elif normalized_key == "r":
-            self._restore_band_zero_torque()
+            self._restore_band()
         elif normalized_key == "q":
             self.close()
 
@@ -320,8 +265,8 @@ class SimBridge:
 
     def _keyboard_control_loop(self) -> None:
         print(
-            "[sim_bridge] keyboard: Up/Down move band, b=default pose damping, "
-            "n=release band, r=restore band+zero torque, m=enable lowcmd, q=quit."
+            "[sim_bridge] keyboard: Up/Down move band, n=release band, "
+            "b->remote A, r->remote X + restore band, m->remote Start, q=quit."
         )
         try:
             listen_keyboard(
@@ -377,9 +322,6 @@ class SimBridge:
             return
 
         with self.cmd_lock:
-            if self.control_mode != CONTROL_MODE_EXTERNAL_CMD:
-                return
-
             self.low_cmd = msg
             self.mode_machine = int(getattr(msg, "mode_machine", self.mode_machine))
             self.mode_pr = int(getattr(msg, "mode_pr", self.mode_pr))
@@ -413,6 +355,7 @@ class SimBridge:
             ].copy()
 
         msg = unitree_hg_msg_dds__LowState_()
+        msg.mode_pr = int(self.mode_pr)
         msg.mode_machine = int(self.mode_machine)
         msg.tick = int(self.state_tick)
 
@@ -426,6 +369,7 @@ class SimBridge:
         msg.imu_state.accelerometer = imu_acc.tolist()
         if hasattr(msg.imu_state, "rpy"):
             msg.imu_state.rpy = quat_wxyz_to_rpy(base_quat).tolist()
+        msg.wireless_remote = self._build_wireless_remote()
 
         msg.crc = CRC().Crc(msg)
         self.state_tick += 1
@@ -477,7 +421,6 @@ class SimBridge:
                 print(
                     f"[sim_bridge] t={steps / self.sim_freq:6.2f}s "
                     f"height={self.data.qpos[2]:.3f} "
-                    f"mode={self.control_mode} "
                     f"cmd={'yes' if self.command_received else 'no'} "
                     f"band={'on' if self.band_enabled else 'off'}"
                 )
@@ -545,6 +488,13 @@ class SimBridge:
         ):
             self.lowstate_publisher_thread.join(timeout=1.0)
 
+    def cleanup(self):
+        if self.cleanup_done:
+            return
+
+        self.cleanup_done = True
+        self.is_alive = False
+
         if self.lowcmd_subscriber is not None and hasattr(self.lowcmd_subscriber, "Close"):
             try:
                 self.lowcmd_subscriber.Close()
@@ -563,4 +513,4 @@ if __name__ == "__main__":
     try:
         bridge.run()
     finally:
-        bridge.close()
+        bridge.cleanup()
