@@ -1,5 +1,6 @@
 import math
 import signal
+import struct
 import threading
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ DEFAULT_BAND_MIN_HEIGHT = 0.8
 DEFAULT_BAND_MAX_HEIGHT = 2.2
 DEFAULT_BAND_MAX_FORCE = 400.0
 DEFAULT_BASE_QUAT = np.array([0.70710678, 0.0, 0.0, 0.70710678], dtype=np.float64)
+DEFAULT_STICK_HALF_DEFLECTION = 0.5
 DEFAULT_REMOTE_KEYMAP = {
     "b": (3, 0),  # keyboard b -> remote A
     "r": (3, 2),  # keyboard r -> remote X
@@ -235,6 +237,16 @@ class SimBridge:
         with self.keyboard_state_lock:
             pressed_keys = self.pressed_keys.copy()
 
+        lx = DEFAULT_STICK_HALF_DEFLECTION * float("a" in pressed_keys) - DEFAULT_STICK_HALF_DEFLECTION * float("d" in pressed_keys)
+        rx = DEFAULT_STICK_HALF_DEFLECTION * float("q" in pressed_keys) - DEFAULT_STICK_HALF_DEFLECTION * float("e" in pressed_keys)
+        ry = 0.0
+        ly = DEFAULT_STICK_HALF_DEFLECTION * float("w" in pressed_keys) - DEFAULT_STICK_HALF_DEFLECTION * float("s" in pressed_keys)
+
+        wireless_remote[4:8] = struct.pack("<f", lx)
+        wireless_remote[8:12] = struct.pack("<f", rx)
+        wireless_remote[12:16] = struct.pack("<f", ry)
+        wireless_remote[20:24] = struct.pack("<f", ly)
+
         for key, (byte_index, bit_index) in self.remote_keymap.items():
             if key in pressed_keys:
                 wireless_remote[byte_index] |= 1 << bit_index
@@ -255,7 +267,7 @@ class SimBridge:
             self._release_band()
         elif normalized_key == "r":
             self._restore_band()
-        elif normalized_key == "q":
+        elif normalized_key == "esc":
             self.close()
 
     def _on_keyboard_release(self, key: str) -> None:
@@ -266,7 +278,8 @@ class SimBridge:
     def _keyboard_control_loop(self) -> None:
         print(
             "[sim_bridge] keyboard: Up/Down move band, n=release band, "
-            "b->remote A, r->remote X + restore band, m->remote Start, q=quit."
+            "wsad->left stick +/-0.5, qe->right stick x +/-0.5, "
+            "b->remote A, r->remote X + restore band, m->remote Start, esc=quit."
         )
         try:
             listen_keyboard(
