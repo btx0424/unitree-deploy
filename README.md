@@ -29,7 +29,6 @@ uv run python unitree-deploy/g1_low_level_example.py
 相机序列号 `rs-enumerate-devices`
 
 存在问题：
-1. 重置后机器人乱飞
-2. 需要在终端输入键盘指令
+1. 需要在终端输入键盘指令
 
 <video controls src="可视化.webm" title="Title"></video>

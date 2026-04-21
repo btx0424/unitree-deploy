@@ -317,19 +317,6 @@ class Controller:
             command=command,
         )
 
-    def compute_action(self, obs) -> np.ndarray:
-        action = self.policy.compute_action(obs)
-        action = np.asarray(action, dtype=np.float64).reshape(-1)
-        return np.clip(action, -self.policy.action_clip, self.policy.action_clip)
-
-    def _action_to_target_q(self, action: np.ndarray) -> np.ndarray:
-        target_q = np.asarray(self.policy.default_joint_pos_full, dtype=np.float64).copy()
-        controlled_indices = np.asarray(self.policy.controlled_joint_indices, dtype=np.int64).reshape(-1)
-        default_joint_pos = np.asarray(self.policy.default_joint_pos_controlled, dtype=np.float64).reshape(-1)
-        action_scaling = np.asarray(self.policy.action_scaling_controlled, dtype=np.float64).reshape(-1)
-        target_q[controlled_indices] = default_joint_pos + action_scaling * action
-        return target_q
-
     def zero_torque_state(self) -> None:
         if self._consume_button("A"):
             self._transition_to(STATE_MOVE_TO_DEFAULT)
@@ -398,8 +385,7 @@ class Controller:
             return
 
         obs_input = self.get_observation_state()
-        action = self.compute_action(obs_input)
-        target_q_isaac = self._action_to_target_q(action)
+        target_q_isaac = self.policy.compute_target_q(obs_input)
         target_q = self._isaac_to_raw(target_q_isaac)
 
         self._fill_low_cmd(
@@ -418,7 +404,7 @@ class Controller:
             f"topics: lowstate={self.lowstate_topic}, lowcmd={self.lowcmd_topic}"
         )
         if self.config.mode == "sim":
-            print("[deploy] sim keymap: b->A, m->Start, r->X")
+            print("[deploy] sim keymap: b->A, m->Start, r->X + reset sim state")
         print("[deploy] A: zero torque -> default pose, Start: default pose -> run, X: back to zero torque")
         print("[deploy] waiting for lowstate...")
 

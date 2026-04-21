@@ -121,7 +121,7 @@ class Policy:
     def reset(self) -> None:
         self.observation.reset()
 
-    def compute_action(self, context: ObservationContext) -> np.ndarray:
+    def compute_target_q(self, context: ObservationContext) -> np.ndarray:
         self.observation.update(context)
         obs_vector = self.observation.compute().astype(np.float32, copy=False)
         outputs = self.session.run(
@@ -132,7 +132,11 @@ class Policy:
         controlled_action = policy_action[self.policy_to_controlled_reorder]
         for previous_action_observation in self.previous_action_observations:
             previous_action_observation.record_action(controlled_action)
-        return controlled_action.copy()
+        clipped_action = np.clip(controlled_action, -self.action_clip, self.action_clip)
 
-    def __call__(self, context: ObservationContext) -> np.ndarray:
-        return self.compute_action(context)
+        target_q = self.default_joint_pos_full.astype(np.float64, copy=True)
+        target_q[self.controlled_joint_indices] = (
+            self.default_joint_pos_controlled.astype(np.float64, copy=False)
+            + self.action_scaling_controlled.astype(np.float64, copy=False) * clipped_action
+        )
+        return target_q

@@ -14,9 +14,11 @@ from unitree_sdk2py.core.channel import (
     ChannelSubscriber,
 )
 from unitree_sdk2py.idl.default import (
+    unitree_go_msg_dds__SportModeState_,
     unitree_hg_msg_dds__LowCmd_,
     unitree_hg_msg_dds__LowState_,
 )
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 
@@ -26,6 +28,7 @@ from sshkeyboard import listen_keyboard, stop_listening
 MODEL_PATH = Path(__file__).resolve().parent / "robot_model" / "g1.xml"
 DEFAULT_LOWCMD_TOPIC = "rt/lowcmd"
 DEFAULT_LOWSTATE_TOPIC = "rt/lowstate"
+DEFAULT_ODOMSTATE_TOPIC = "rt/odommodestate"
 DEFAULT_NET = "lo"
 DEFAULT_SIM_FREQ = 500
 DEFAULT_STATE_FREQ = 200
@@ -88,6 +91,7 @@ class SimBridge:
     def __init__(self):
         self.lowcmd_topic = DEFAULT_LOWCMD_TOPIC
         self.lowstate_topic = DEFAULT_LOWSTATE_TOPIC
+        self.odomstate_topic = DEFAULT_ODOMSTATE_TOPIC
         self.sim_freq = DEFAULT_SIM_FREQ
         self.state_freq = DEFAULT_STATE_FREQ
         self.render_freq = DEFAULT_RENDER_FREQ
@@ -119,6 +123,7 @@ class SimBridge:
             [0.0, 0.0, DEFAULT_BASE_HEIGHT, *DEFAULT_BASE_QUAT], dtype=np.float64
         )
         initial_qpos = np.zeros(self.num_motor, dtype=np.float64)
+        self.initial_joint_qpos = initial_qpos.copy()
 
         self.data.qpos[:7] = self.base_qpos
         self.data.qpos[7 : 7 + self.num_motor] = initial_qpos
@@ -169,12 +174,20 @@ class SimBridge:
                 anchor_positions.append(anchor_position)
             self.band_anchor_positions = np.asarray(anchor_positions, dtype=np.float64)
             self.band_target_height = float(np.mean(self.band_anchor_positions[:, 2]))
+            self.initial_band_anchor_positions = self.band_anchor_positions.copy()
+            self.initial_band_target_height = float(self.band_target_height)
+        else:
+            self.initial_band_anchor_positions = None
+            self.initial_band_target_height = 0.0
 
         self.low_cmd = unitree_hg_msg_dds__LowCmd_()
         self.low_state = unitree_hg_msg_dds__LowState_()
+        self.odom_state = unitree_go_msg_dds__SportModeState_()
 
         self.lowstate_publisher = ChannelPublisher(self.lowstate_topic, LowState_)
         self.lowstate_publisher.Init()
+        self.odomstate_publisher = ChannelPublisher(self.odomstate_topic, SportModeState_)
+        self.odomstate_publisher.Init()
         self.lowstate_publisher_thread = threading.Thread(
             target=self.lowstate_handler,
             name="lowstate-publisher",
@@ -232,6 +245,31 @@ class SimBridge:
 
         print(f"[sim_bridge] suspension bands restored at z={target_height:.3f} m")
 
+    def _reset_sim_state_for_zero_torque(self) -> None:
+        with self.state_lock:
+            with self.band_lock:
+                if self.band_anchor_positions is not None and self.initial_band_anchor_positions is not None:
+                    self.band_enabled = True
+                    self.band_target_height = float(self.initial_band_target_height)
+                    self.band_anchor_positions[:] = self.initial_band_anchor_positions
+
+            with self.cmd_lock:
+                self.target_q[:] = self.initial_joint_qpos
+                self.target_dq[:] = 0.0
+                self.kp[:] = 0.0
+                self.kd[:] = 0.0
+                self.tau_ff[:] = 0.0
+                self.motor_enable[:] = False
+
+            mujoco.mj_resetData(self.model, self.data)
+            self.data.qpos[:7] = self.base_qpos
+            self.data.qpos[7 : 7 + self.num_motor] = self.initial_joint_qpos
+            self.data.qvel[:] = 0.0
+            self.data.ctrl[:] = 0.0
+            mujoco.mj_forward(self.model, self.data)
+
+        print("[sim_bridge] reset robot state to initial pose")
+
     def _build_wireless_remote(self) -> list[int]:
         wireless_remote = [0] * 40
         with self.keyboard_state_lock:
@@ -266,7 +304,7 @@ class SimBridge:
         elif normalized_key == "n":
             self._release_band()
         elif normalized_key == "r":
-            self._restore_band()
+            self._reset_sim_state_for_zero_torque()
         elif normalized_key == "esc":
             self.close()
 
@@ -279,7 +317,7 @@ class SimBridge:
         print(
             "[sim_bridge] keyboard: Up/Down move band, n=release band, "
             "wsad->left stick +/-0.5, qe->right stick x +/-0.5, "
-            "b->remote A, r->remote X + restore band, m->remote Start, esc=quit."
+            "b->remote A, r->remote X + reset to zero-torque state, m->remote Start, esc=quit."
         )
         try:
             listen_keyboard(
@@ -389,11 +427,42 @@ class SimBridge:
         self.low_state = msg
         return msg
 
+    def build_odom_state(self) -> SportModeState_:
+        with self.state_lock:
+            base_pos = self.data.qpos[:3].copy()
+            base_quat = self.data.qpos[3:7].copy()
+            base_lin_vel = self.data.qvel[:3].copy()
+            if self.imu_ang_vel_adr is not None and self.imu_ang_vel_dim >= 3:
+                imu_gyro = self.data.sensordata[
+                    self.imu_ang_vel_adr : self.imu_ang_vel_adr + 3
+                ].copy()
+            else:
+                imu_gyro = self.data.qvel[3:6].copy()
+            imu_acc = self.data.sensordata[
+                self.imu_lin_acc_adr : self.imu_lin_acc_adr + 3
+            ].copy()
+
+        msg = unitree_go_msg_dds__SportModeState_()
+        msg.position = base_pos.tolist()
+        msg.velocity = base_lin_vel.tolist()
+        msg.body_height = float(base_pos[2])
+        msg.yaw_speed = float(imu_gyro[2])
+        msg.imu_state.quaternion = base_quat.tolist()
+        msg.imu_state.gyroscope = imu_gyro.tolist()
+        msg.imu_state.accelerometer = imu_acc.tolist()
+        if hasattr(msg.imu_state, "rpy"):
+            msg.imu_state.rpy = quat_wxyz_to_rpy(base_quat).tolist()
+
+        self.odom_state = msg
+        return msg
+
     def lowstate_handler(self):
         timer = LoopTimer(1.0 / self.state_freq)
         while self.is_alive:
-            msg = self.build_low_state()
-            self.lowstate_publisher.Write(msg)
+            lowstate_msg = self.build_low_state()
+            odomstate_msg = self.build_odom_state()
+            self.lowstate_publisher.Write(lowstate_msg)
+            self.odomstate_publisher.Write(odomstate_msg)
             timer.sleep()
 
     def _compute_ctrl(self, qpos: np.ndarray, qvel: np.ndarray) -> np.ndarray:
@@ -443,14 +512,13 @@ class SimBridge:
     def run(self):
         print(
             f"[sim_bridge] topics: lowcmd={self.lowcmd_topic}, "
-            f"lowstate={self.lowstate_topic}"
+            f"lowstate={self.lowstate_topic}, odom={self.odomstate_topic}"
         )
         print(
             f"[sim_bridge] sim={self.sim_freq}Hz state_pub={self.state_freq}Hz"
         )
         if self.band_enabled:
             print(f"[sim_bridge] suspension bands enabled at z={self.band_target_height:.3f} m")
-
         self.lowstate_publisher_thread.start()
         self.keyboard_thread = threading.Thread(
             target=self._keyboard_control_loop,
@@ -517,6 +585,12 @@ class SimBridge:
         if self.lowstate_publisher is not None and hasattr(self.lowstate_publisher, "Close"):
             try:
                 self.lowstate_publisher.Close()
+            except Exception:
+                pass
+
+        if self.odomstate_publisher is not None and hasattr(self.odomstate_publisher, "Close"):
+            try:
+                self.odomstate_publisher.Close()
             except Exception:
                 pass
 if __name__ == "__main__":
