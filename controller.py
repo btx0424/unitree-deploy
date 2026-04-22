@@ -11,6 +11,7 @@ import yaml
 
 from observation import ObservationContext
 from policy import Policy
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
 from unitree_sdk2py.core.channel import (
     ChannelFactoryInitialize,
     ChannelPublisher,
@@ -131,6 +132,7 @@ class Controller:
     def __init__(self, config: RuntimeConfig):
         self.config = config
         self.controller_config = self._load_controller_config()
+        self.msc = None
         self.real_joint_names = list(self.controller_config["real_joint_names"])
         self.isaac_joint_names = list(self.controller_config["isaac_joint_names_state"])
         if self.config.mode == "sim":
@@ -178,6 +180,9 @@ class Controller:
         self.state_enter_t = time.perf_counter()
         self.move_start_q_isaac = np.zeros(NUM_JOINTS, dtype=np.float64)
 
+        if self.config.mode == "real":
+            self._enter_debug_mode()
+
         self.lowstate_subscriber = ChannelSubscriber(self.lowstate_topic, LowState_)
         self.lowstate_lock = threading.Lock()
         self.lowstate_subscriber.Init(self._consume_low_state, 1)
@@ -191,6 +196,20 @@ class Controller:
         controller_yaml_path = Path(self.config.deploy_yaml).resolve().with_name(DEFAULT_CONTROLLER_YAML)
         with controller_yaml_path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f)
+
+    def _enter_debug_mode(self) -> None:
+        print("[controller] real mode: releasing current motion mode...")
+        self.msc = MotionSwitcherClient()
+        self.msc.SetTimeout(5.0)
+        self.msc.Init()
+
+        status, result = self.msc.CheckMode()
+        while result["name"]:
+            self.msc.ReleaseMode()
+            status, result = self.msc.CheckMode()
+            time.sleep(1.0)
+
+        print("[controller] real mode: motion mode released")
 
     def _build_gain_array(self, key: str) -> np.ndarray:
         gain_values = np.asarray(self.controller_config[key], dtype=np.float64).reshape(-1)
@@ -248,7 +267,7 @@ class Controller:
             self.remote.set(msg.wireless_remote)
 
             self.command[:] = np.array(
-                [self.remote.ly, self.remote.lx, self.remote.rx],
+                [self.remote.ly, -self.remote.lx, -self.remote.rx],
                 dtype=np.float64,
             )
             self.has_low_state = True

@@ -27,9 +27,9 @@ policy_input_dim: 249
 
 command_dim: 4
 command_range:
-  - [-0.5, 1.2]  # lin_vel_x
-  - [-0.8, 0.8]  # lin_vel_y
-  - [-1.5, 1.5]  # ang_vel_yaw
+  - [-0.35, 0.35]  # lin_vel_x
+  - [-0.4, 0.4]  # lin_vel_y
+  - [-0.75, 0.75]  # ang_vel_yaw
 height_command: 0.3
 
 command_history_len: 1
