@@ -94,6 +94,14 @@ class ProjectedGravityObservation(ObservationBase):
         return _quat_to_body_gravity(context.quat).astype(self.dtype, copy=False)
 
 
+class RootAngularVelocityObservation(ObservationBase):
+    def __init__(self, *, history_len: int, dtype=np.float32) -> None:
+        super().__init__(base_dim=3, history_len=history_len, dtype=dtype)
+
+    def _compute_current(self, context: ObservationContext) -> np.ndarray:
+        return np.asarray(context.gyro, dtype=self.dtype).reshape(-1)
+
+
 class JointPositionObservation(ObservationBase):
     def __init__(
         self,
@@ -112,14 +120,40 @@ class JointPositionObservation(ObservationBase):
 
 
 class JointVelocityObservation(ObservationBase):
-    def __init__(self, *, controlled_joint_indices: np.ndarray, history_len: int, dtype=np.float32) -> None:
+    def __init__(
+        self,
+        *,
+        controlled_joint_indices: np.ndarray,
+        history_len: int,
+        use_position_difference: bool = False,
+        control_dt: float | None = None,
+        dtype=np.float32,
+    ) -> None:
         controlled_joint_indices = np.asarray(controlled_joint_indices, dtype=np.int64).reshape(-1)
         super().__init__(base_dim=controlled_joint_indices.size, history_len=history_len, dtype=dtype)
         self.controlled_joint_indices = controlled_joint_indices
+        self.use_position_difference = bool(use_position_difference)
+        self.control_dt = None if control_dt is None else float(control_dt)
+        self._previous_q = None
 
     def _compute_current(self, context: ObservationContext) -> np.ndarray:
+        if self.use_position_difference:
+            if self.control_dt is None or self.control_dt <= 0.0:
+                raise ValueError("control_dt must be positive when use_position_difference is enabled.")
+            q = np.asarray(context.q, dtype=self.dtype).reshape(-1)[self.controlled_joint_indices]
+            if self._previous_q is None:
+                joint_vel = np.zeros_like(q)
+            else:
+                joint_vel = (q - self._previous_q) / self.control_dt
+            self._previous_q = q.copy()
+            return joint_vel
+
         dq = np.asarray(context.dq, dtype=self.dtype).reshape(-1)
         return dq[self.controlled_joint_indices]
+
+    def reset(self) -> None:
+        super().reset()
+        self._previous_q = None
 
 
 class PreviousActionObservation(ObservationBase):

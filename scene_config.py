@@ -12,10 +12,9 @@ import viser.transforms as vtf
 from mujoco import mj_id2name, mjtGeom, mjtObj
 
 try:
-    import pyrealsense2 as rs
+  import pyrealsense2 as rs
 except ImportError:
     rs = None
-
 
 @dataclass
 class BodyMesh:
@@ -316,11 +315,6 @@ class RealSenseCameraStream:
         mj_model: mujoco.MjModel | None = None,
         show_frustum: bool = True,
     ):
-        if rs is None:
-            raise RuntimeError(
-                "pyrealsense2 is not installed. Install it before enabling RealSense camera streaming."
-            )
-
         self.config = config
         self.server = server
         self.mj_model = mj_model
@@ -542,33 +536,13 @@ class StandaloneMujocoScene:
         self.update_from_mjdata(self.mj_data)
 
     def _add_ground(self) -> None:
-        plane_found = False
-        for geom_id in range(int(self.mj_model.ngeom)):
-            if int(self.mj_model.geom_type[geom_id]) != mjtGeom.mjGEOM_PLANE:
-                continue
-            body_id = int(self.mj_model.geom_bodyid[geom_id])
-            if not _is_fixed_body(self.mj_model, body_id):
-                continue
-            geom_name = mj_id2name(self.mj_model, mjtObj.mjOBJ_GEOM, geom_id) or f"geom_{geom_id}"
-            self.server.scene.add_grid(
-                f"/fixed_bodies/{_body_name(self.mj_model, body_id)}/{geom_name}",
-                infinite_grid=True,
-                fade_distance=50.0,
-                shadow_opacity=0.2,
-                plane_opacity=0.4,
-                position=np.asarray(self.mj_model.geom_pos[geom_id], dtype=np.float32),
-                wxyz=np.asarray(self.mj_model.geom_quat[geom_id], dtype=np.float32),
-            )
-            plane_found = True
-
-        if not plane_found:
-            self.server.scene.add_grid(
-                "/fixed_bodies/ground",
-                infinite_grid=True,
-                fade_distance=50.0,
-                shadow_opacity=0.2,
-                plane_opacity=0.4,
-            )
+        self.server.scene.add_grid(
+            "/fixed_bodies/ground",
+            infinite_grid=True,
+            fade_distance=50.0,
+            shadow_opacity=0.2,
+            plane_opacity=0.4,
+        )
 
     def _add_fixed_meshes(self) -> None:
         for body in self.body_meshes:

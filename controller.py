@@ -224,7 +224,7 @@ class Controller:
         if state == STATE_MOVE_TO_DEFAULT:
             with self.lowstate_lock:
                 self.move_start_q_isaac = self.q_isaac.copy()
-        print(f"[deploy] state -> {self.state}")
+        print(f"[controller] state -> {self.state}")
 
     def _consume_low_state(self, msg: LowState_) -> None:
         with self.lowstate_lock:
@@ -400,13 +400,13 @@ class Controller:
 
     def spin(self) -> None:
         print(
-            f"[deploy] mode={self.config.mode} "
+            f"[controller] mode={self.config.mode} "
             f"topics: lowstate={self.lowstate_topic}, lowcmd={self.lowcmd_topic}"
         )
         if self.config.mode == "sim":
-            print("[deploy] sim keymap: b->A, m->Start, r->X + reset sim state")
-        print("[deploy] A: zero torque -> default pose, Start: default pose -> run, X: back to zero torque")
-        print("[deploy] waiting for lowstate...")
+            print("[controller] sim keymap: b->A, m->Start, r->X + reset sim state")
+        print("[controller] A: zero torque -> default pose, Start: default pose -> run, X: back to zero torque")
+        print("[controller] waiting for lowstate...")
 
         timer = LoopTimer(self.control_dt)
         last_log_t = time.perf_counter()
@@ -430,7 +430,7 @@ class Controller:
                 with self.lowstate_lock:
                     command = self.command.copy()
                 print(
-                    f"[deploy] state={self.state} "
+                    f"[controller] state={self.state} "
                     f"cmd=({command[0]:+.2f}, {command[1]:+.2f}, {command[2]:+.2f})"
                 )
                 last_log_t = now
@@ -453,7 +453,7 @@ class Controller:
 
 
 def parse_args() -> RuntimeConfig:
-    parser = argparse.ArgumentParser(description="Reusable G1 deploy controller for sim or real robot.")
+    parser = argparse.ArgumentParser(description="Reusable G1 controller for sim or real robot.")
     parser.add_argument(
         "--mode",
         choices=("real", "sim"),
@@ -482,7 +482,7 @@ if __name__ == "__main__":
     config = parse_args()
 
     if config.mode == "real":
-        print("WARNING: Please ensure there are no obstacles around the robot while running deploy.py.")
+        print("WARNING: Please ensure there are no obstacles around the robot while running controller.py.")
         input("Press Enter to continue...")
 
     if config.net:

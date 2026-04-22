@@ -15,6 +15,7 @@ from observation import (
     ObservationGroup,
     PreviousActionObservation,
     ProjectedGravityObservation,
+    RootAngularVelocityObservation,
 )
 
 class Policy:
@@ -88,6 +89,10 @@ class Policy:
             height_command=float(self.config["height_command"]),
             command_range=self.config["command_range"],
         )
+        root_angvel_observation = RootAngularVelocityObservation(
+            history_len=int(self.config["root_angvel_history_len"])
+        )
+
         gravity_observation = ProjectedGravityObservation(
             history_len=int(self.config["projected_gravity_history_len"])
         )
@@ -98,6 +103,8 @@ class Policy:
         joint_vel_observation = JointVelocityObservation(
             controlled_joint_indices=self.controlled_joint_indices,
             history_len=int(self.config["joint_vel_history_len"]),
+            use_position_difference=bool(self.config["joint_vel_from_pos"]),
+            control_dt=self.control_step_dt,
         )
         previous_action_observation = PreviousActionObservation(
             action_dim=self.action_dim,
@@ -108,6 +115,7 @@ class Policy:
         self.observation = ObservationGroup(
             [
                 command_observation,
+                root_angvel_observation,
                 gravity_observation,
                 joint_pos_observation,
                 joint_vel_observation,

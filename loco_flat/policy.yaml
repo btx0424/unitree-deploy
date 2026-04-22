@@ -1,5 +1,5 @@
 # flat-ground locomotion policy
-policy_path: "policy-04-18_21-12.onnx"
+policy_path: "policy-04-22_11-14.onnx"
 
 step_dt: 0.02
 physics_dt: 0.002
@@ -23,19 +23,21 @@ default_qpos_full: [
 
 policy_input_name: "policy"
 policy_output_name: "action"
-policy_input_dim: 246
+policy_input_dim: 249
 
 command_dim: 4
 command_range:
-  - [-0.8, 1.4]  # lin_vel_x
+  - [-0.5, 1.2]  # lin_vel_x
   - [-0.8, 0.8]  # lin_vel_y
-  - [-2.0, 2.0]  # ang_vel_yaw
+  - [-1.5, 1.5]  # ang_vel_yaw
 height_command: 0.3
 
 command_history_len: 1
+root_angvel_history_len: 1
 projected_gravity_history_len: 4
 joint_pos_history_len: 4
 joint_vel_history_len: 4
+joint_vel_from_pos: true
 prev_action_history_len: 2
 history_order: "new_to_old"
 

@@ -7,28 +7,42 @@ cd unitree_sdk2_python
 uv pip install -e .
 ```
 
-# Real
-`uv run python unitree-deploy/g1_low_level_example.py --mode real --camera`
-# Sim
-```
-uv run python unitree-deploy/sim_bridge.py
+# 启动
+真机控制：
+`uv run python unitree-deploy/controller.py --mode real --camera --deploy-yaml unitree-deploy/loco_flat/controller.yaml`
 
-uv run python unitree-deploy/deploy.py
+仿真控制：
+`uv run python unitree-deploy/sim_bridge.py`
+`uv run python unitree-deploy/controller.py --mode sim --deploy-yaml unitree-deploy/loco_flat/controller.yaml`
 
-uv run python unitree-deploy/g1_low_level_example.py
-```
-## Sim 按键说明
-程序或重置后在零力矩模式，依次按下以下按键
-- `r`恢复初始仿真状态，即零力矩模式
-- `b`进入阻尼模式，即默认位置（双手端平）
-- `up`和`down`调整吊带位置
-- `n`解除龙门架的带子
-- `m`开始接收外部指令
+状态可视化：
+`uv run python unitree-deploy/visualizer.py --mode sim`
 
+## 控制器状态机
+`controller.py` 有 4 个状态：
+- `zero_torque_state`
+- `move_to_default_qpos`
+- `default_qpos_state`
+- `run`
 
-相机序列号 `rs-enumerate-devices`
+切换规则：
+- `A` 从零力矩进入默认姿态过渡
+- `Start` 从默认姿态进入 `run`
+- `X` 返回零力矩
 
-存在问题：
-1. 需要在终端输入键盘指令
+## 仿真按键
+`sim_bridge.py` 同时负责遥控器映射和仿真复位：
+- `r` 重置仿真到初始状态
+- `b` 发送遥控器 `A`
+- `m` 发送遥控器 `Start`
+- `up` / `down` 调整吊带高度
+- `n` 解除吊带
+- `w/s/a/d/q/e` 分别控制前后、侧移、转向
+- `esc` 退出
+
+## 说明
+- `controller.py` 只负责状态订阅和控制输出。
+- `sim_bridge.py` 负责仿真状态发布和键盘输入。
+- `visualizer.py` 负责纯可视化。
 
 <video controls src="可视化.webm" title="Title"></video>

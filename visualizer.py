@@ -1,7 +1,5 @@
 import argparse
-from contextlib import suppress
 import time
-import os
 from dataclasses import dataclass
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
@@ -14,21 +12,21 @@ import numpy as np
 
 import mujoco
 
-from standalone_viser_mesh import RealSenseCameraConfig, StandaloneMujocoScene
+from scene_config import RealSenseCameraConfig, StandaloneMujocoScene
 import viser
 
 from pathlib import Path
 
 MODEL = Path(__file__).parent / "robot_model" / "g1.xml"
-DEFAULT_MODE = os.getenv("G1_RUN_MODE", "sim")
-DEFAULT_ENABLE_CAMERA = os.getenv("ENABLE_CAMERA", "0").lower() not in {"0", "false", "no"}
-DEFAULT_REALSENSE_SERIAL = os.getenv("REALSENSE_SERIAL", "140122071098")
-DEFAULT_REALSENSE_CAMERA_NAME = os.getenv("REALSENSE_CAMERA_NAME", "d435_head")
-DEFAULT_REALSENSE_POSE_CAMERA_NAME = os.getenv("REALSENSE_POSE_CAMERA_NAME", "d435_head")
-DEFAULT_REALSENSE_WIDTH = int(os.getenv("REALSENSE_WIDTH", "640"))
-DEFAULT_REALSENSE_HEIGHT = int(os.getenv("REALSENSE_HEIGHT", "480"))
-DEFAULT_REALSENSE_FPS = int(os.getenv("REALSENSE_FPS", "30"))
-DEFAULT_REALSENSE_ENABLE_DEPTH = os.getenv("REALSENSE_ENABLE_DEPTH", "1").lower() not in {"0", "false", "no"}
+DEFAULT_MODE = "sim"
+DEFAULT_ENABLE_CAMERA = False
+DEFAULT_REALSENSE_SERIAL = "140122071098"
+DEFAULT_REALSENSE_CAMERA_NAME = "d435_head"
+DEFAULT_REALSENSE_POSE_CAMERA_NAME = "d435_head"
+DEFAULT_REALSENSE_WIDTH = 640
+DEFAULT_REALSENSE_HEIGHT = 480
+DEFAULT_REALSENSE_FPS = 30
+DEFAULT_REALSENSE_ENABLE_DEPTH = True
 DEFAULT_LOWSTATE_TOPIC = "rt/lowstate"
 DEFAULT_ODOMSTATE_TOPIC = "rt/odommodestate"
 
@@ -40,7 +38,7 @@ class RuntimeConfig:
     enable_camera: bool
 
 
-class Custom:
+class G1StateVisualizer:
     def __init__(self, config: RuntimeConfig):
         self.config = config
         self.low_state = None
@@ -131,28 +129,23 @@ class Custom:
         self._closed = True
 
         if self._visualize_thread_started and self.timerPtr is not None:
-            with suppress(Exception):
-                self.timerPtr.Wait(1.0)
+            self.timerPtr.Wait(1.0)
 
         if self.lowstate_subscriber is not None:
-            with suppress(Exception):
-                self.lowstate_subscriber.Close()
+            self.lowstate_subscriber.Close()
 
         if self.odomstate_subscriber is not None:
-            with suppress(Exception):
-                self.odomstate_subscriber.Close()
+            self.odomstate_subscriber.Close()
 
         if self.viser_scene is not None:
-            with suppress(Exception):
-                self.viser_scene.close()
+            self.viser_scene.close()
 
         if self.viser_server is not None:
-            with suppress(Exception):
-                self.viser_server.stop()
+            self.viser_server.stop()
 
 
 def parse_args() -> RuntimeConfig:
-    parser = argparse.ArgumentParser(description="G1 low-level example for real robot or simulation.")
+    parser = argparse.ArgumentParser(description="G1 state visualizer for real robot or simulation.")
     parser.add_argument("--net", default='lo', help="Optional DDS network interface.")
     parser.add_argument(
         "--mode",
@@ -181,14 +174,14 @@ if __name__ == '__main__':
     else:
         ChannelFactoryInitialize(0)
 
-    custom = Custom(config)
+    visualizer = G1StateVisualizer(config)
     try:
-        custom.Init()
-        custom.Start()
+        visualizer.Init()
+        visualizer.Start()
 
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
-        custom.Close()
+        visualizer.Close()
