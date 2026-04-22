@@ -9,7 +9,7 @@ uv pip install -e .
 
 # 启动
 真机控制：
-`uv run python unitree-deploy/controller.py --mode real --camera --deploy-yaml unitree-deploy/loco_flat/controller.yaml`
+`uv run python unitree-deploy/controller.py --mode real --net <跑策略的网卡名> --deploy-yaml unitree-deploy/loco_flat/controller.yaml`
 
 仿真控制：
 `uv run python unitree-deploy/sim_bridge.py`
