@@ -1,9 +1,17 @@
 # Install
+整体目录
 ```
-cd unitree-deplog
+${workspaceFolder}
+├── stubs
+├── unitree-deploy
+└── unitree_sdk2_python
+```
+```
+cd unitree-deploy
 uv sync
 source .venv/bin/activate
-cd unitree_sdk2_python
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+cd ../unitree_sdk2_python
 uv pip install -e .
 ```
 
@@ -46,3 +54,11 @@ uv pip install -e .
 - `visualizer.py` 负责纯可视化。
 
 <video controls src="可视化.webm" title="Title"></video>
+
+## IDE中智能显示mujoco、pyrealsense等（C编写的py接口）的子类
+```
+cd ${workspaceFolder}
+uv pip install mypy
+uv run stubgen -m mujoco -o stubs
+uv run stubgen -p mujoco -o stubs
+```
