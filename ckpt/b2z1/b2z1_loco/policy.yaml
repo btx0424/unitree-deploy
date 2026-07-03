@@ -1,0 +1,118 @@
+#
+# Active-Adaptation B2Z1Loco deployment policy.
+# Source export: humaniod_train/active-adaptation/scripts/exports/B2Z1Loco/policy-07-01_18-07.onnx
+#
+
+robot: b2z1
+policy_path: "policy.onnx"
+
+policy_step_dt: 0.02
+physics_dt: 0.005
+decimation: 4
+
+# Training observation/action joint order follows unitree_b2_z1 JOINT_NAMES_SIMULATION
+# filtered by ".*_(hip|thigh|calf)_joint".
+obs_joint_order: [
+  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
+  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
+  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+]
+
+sdk_joint_order: [
+  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
+  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
+  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+]
+
+# Default joint positions in sdk_joint_order.
+default_qpos: [
+  0.1, -0.1, 0.1, -0.1,
+  0.8, 0.8, 1.0, 1.0,
+  -1.5, -1.5, -1.5, -1.5,
+]
+
+policy_input_name: "policy"
+policy_output_name: "loc"
+
+# Training command is [linvel_x, linvel_y, yaw_rate, base_height].
+command_default: [0.0, 0.0, 0.0, 0.4]
+command_names: [linvel_x, linvel_y, yaw_rate, base_height]
+
+obs_use_scaled_prev_action: false
+obs_prime_on_reset: false
+obs_group_concat_mode: term_major
+observation_types:
+  command: "unitree_deploy.obs.observation:CommandObservation"
+  projected_gravity: "unitree_deploy.obs.observation:ProjectedGravityObservation"
+  joint_pos: "unitree_deploy.obs.observation:JointPositionObservation"
+  joint_vel: "unitree_deploy.obs.observation:JointVelocityObservation"
+  prev_action: "unitree_deploy.obs.observation:PreviousActionObservation"
+  base_ang_vel: "unitree_deploy.obs.observation:BaseAngularVelocityObservation"
+
+observations:
+  - type: command
+    history_len: 1
+    command_range:
+      - [-1.0, 1.6]   # linvel_x
+      - [-0.8, 0.8]   # linvel_y
+      - [-2.0, 2.0]   # yaw_rate
+      - [0.1, 0.52]   # base_height
+  - type: projected_gravity
+    history_len: 4
+    history_order: newest_first
+  - type: joint_pos
+    history_len: 4
+    history_order: newest_first
+  - type: joint_vel
+    history_len: 4
+    history_order: newest_first
+  - type: prev_action
+    history_len: 2
+    history_order: newest_first
+  - type: base_ang_vel
+    history_len: 1
+
+action_dim: 12
+action_clip: null
+
+action_joint_order: [
+  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
+  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
+  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+]
+
+action_scale: [
+  0.5, 0.5, 0.5, 0.5,
+  0.5, 0.5, 0.5, 0.5,
+  0.5, 0.5, 0.5, 0.5,
+]
+
+kp_policy: [
+  120.0, 120.0, 120.0, 120.0,
+  120.0, 120.0, 120.0, 120.0,
+  120.0, 120.0, 120.0, 120.0,
+]
+
+kd_policy: [
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+]
+
+kp_fixed_stand: [
+  120.0, 120.0, 120.0, 120.0,
+  120.0, 120.0, 120.0, 120.0,
+  120.0, 120.0, 120.0, 120.0,
+]
+
+kd_fixed_stand: [
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+]
+
+kd_damping: [
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+]
