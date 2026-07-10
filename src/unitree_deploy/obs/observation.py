@@ -39,14 +39,24 @@ def _quat_to_body_gravity(quat) -> np.ndarray:
 class ObservationBase:
     """Base class for one observation term with optional history stacking.
 
-    History is stored in chronological order (oldest at index 0, newest at -1),
-    matching the convention used in Isaac Lab training and the C++ deploy code:
+    History is stored internally in chronological order:
         buffer = [t-K+1, ..., t-1, t]
+    The flattened output order can be changed per policy term with history_order.
     """
 
-    def __init__(self, *, base_dim: int, history_len: int, dtype=np.float32) -> None:
+    def __init__(
+        self,
+        *,
+        base_dim: int,
+        history_len: int,
+        history_order: str = "oldest_first",
+        dtype=np.float32,
+    ) -> None:
         self.base_dim = int(base_dim)
         self.history_len = int(history_len)
+        if history_order not in ("oldest_first", "newest_first"):
+            raise ValueError("history_order must be 'oldest_first' or 'newest_first'")
+        self.history_order = history_order
         self.dtype = np.dtype(dtype)
         self.buffer = np.zeros((self.history_len, self.base_dim), dtype=self.dtype)
         self._scale = 1.0
@@ -94,6 +104,11 @@ class ObservationBase:
             self.buffer[:-1] = self.buffer[1:]
         self.buffer[-1] = current
 
+    def ordered_buffer(self) -> np.ndarray:
+        if self.history_order == "newest_first":
+            return self.buffer[::-1]
+        return self.buffer
+
     def compute(self, context: ObservationContext) -> np.ndarray:
         raise NotImplementedError
 
@@ -121,11 +136,17 @@ class CommandObservation(ObservationBase):
         *,
         history_len: int,
         command_range,
+        history_order: str = "oldest_first",
         dtype=np.float32,
     ) -> None:
         command_range_array = np.asarray(command_range, dtype=dtype)
         num_commands = command_range_array.shape[0]
-        super().__init__(base_dim=num_commands, history_len=history_len, dtype=dtype)
+        super().__init__(
+            base_dim=num_commands,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
         self.command_min = command_range_array[:, 0]
         self.command_max = command_range_array[:, 1]
         self._current = np.empty(num_commands, dtype=self.dtype)
@@ -137,16 +158,38 @@ class CommandObservation(ObservationBase):
 
 
 class ProjectedGravityObservation(ObservationBase):
-    def __init__(self, *, history_len: int, dtype=np.float32) -> None:
-        super().__init__(base_dim=3, history_len=history_len, dtype=dtype)
+    def __init__(
+        self,
+        *,
+        history_len: int,
+        history_order: str = "oldest_first",
+        dtype=np.float32,
+    ) -> None:
+        super().__init__(
+            base_dim=3,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
 
     def compute(self, context: ObservationContext) -> np.ndarray:
         return _quat_to_body_gravity(context.quat).astype(self.dtype, copy=False)
 
 
 class BaseAngularVelocityObservation(ObservationBase):
-    def __init__(self, *, history_len: int, dtype=np.float32) -> None:
-        super().__init__(base_dim=3, history_len=history_len, dtype=dtype)
+    def __init__(
+        self,
+        *,
+        history_len: int,
+        history_order: str = "oldest_first",
+        dtype=np.float32,
+    ) -> None:
+        super().__init__(
+            base_dim=3,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
 
     def compute(self, context: ObservationContext) -> np.ndarray:
         return np.asarray(context.gyro, dtype=self.dtype).reshape(-1)
@@ -165,10 +208,16 @@ class JointPositionObservation(ObservationBase):
         controlled_joint_indices: np.ndarray,
         history_len: int,
         default_q: np.ndarray | None = None,
+        history_order: str = "oldest_first",
         dtype=np.float32,
     ) -> None:
         controlled_joint_indices = np.asarray(controlled_joint_indices, dtype=np.int64).reshape(-1)
-        super().__init__(base_dim=controlled_joint_indices.size, history_len=history_len, dtype=dtype)
+        super().__init__(
+            base_dim=controlled_joint_indices.size,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
         self.controlled_joint_indices = controlled_joint_indices
         self.default_q = np.asarray(default_q, dtype=dtype) if default_q is not None else None
 
@@ -187,10 +236,16 @@ class JointVelocityObservation(ObservationBase):
         controlled_joint_indices: np.ndarray,
         history_len: int,
         use_position_difference: bool = False,
+        history_order: str = "oldest_first",
         dtype=np.float32,
     ) -> None:
         controlled_joint_indices = np.asarray(controlled_joint_indices, dtype=np.int64).reshape(-1)
-        super().__init__(base_dim=controlled_joint_indices.size, history_len=history_len, dtype=dtype)
+        super().__init__(
+            base_dim=controlled_joint_indices.size,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
         self.controlled_joint_indices = controlled_joint_indices
         self.use_position_difference = bool(use_position_difference)
         self._previous_q = None
@@ -207,8 +262,20 @@ class JointVelocityObservation(ObservationBase):
 class PreviousActionObservation(ObservationBase):
     """Action history is updated after ONNX inference, not from the sensor snapshot."""
 
-    def __init__(self, *, action_dim: int, history_len: int, dtype=np.float32) -> None:
-        super().__init__(base_dim=action_dim, history_len=history_len, dtype=dtype)
+    def __init__(
+        self,
+        *,
+        action_dim: int,
+        history_len: int,
+        history_order: str = "oldest_first",
+        dtype=np.float32,
+    ) -> None:
+        super().__init__(
+            base_dim=action_dim,
+            history_len=history_len,
+            history_order=history_order,
+            dtype=dtype,
+        )
 
     def compute(self, context: ObservationContext) -> np.ndarray:
         return np.zeros(self.base_dim, dtype=self.dtype)
@@ -276,11 +343,11 @@ class ObservationGroup:
             for history_i in range(self.history_len):
                 for observation in self.observations:
                     next_offset = offset + observation.base_dim
-                    self.output[offset:next_offset] = observation.buffer[history_i]
+                    self.output[offset:next_offset] = observation.ordered_buffer()[history_i]
                     offset = next_offset
             return self.output
 
         # term_major mode: concat by term order
         for observation, output_slice in self._slices:
-            self.output[output_slice] = observation.buffer.reshape(-1)
+            self.output[output_slice] = observation.ordered_buffer().reshape(-1)
         return self.output

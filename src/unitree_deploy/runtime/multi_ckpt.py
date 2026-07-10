@@ -29,6 +29,7 @@ class CkptProfile:
     kd_damping: np.ndarray
     command_min: np.ndarray
     command_max: np.ndarray
+    command_default: np.ndarray
     default_q_obs: np.ndarray
     default_q_sdk: np.ndarray
 
@@ -154,6 +155,7 @@ def build_ckpt_profile(name: str, policy_yaml_path: Path) -> CkptProfile:
         fallback=np.ones(num_joints, dtype=np.float64),
     )
     command_min, command_max = command_range(policy)
+    command_default = command_default_array(policy, command_min, command_max)
     default_q_obs = policy.default_joint_pos
     default_q_sdk = default_q_obs[obs_to_sdk]
 
@@ -172,6 +174,7 @@ def build_ckpt_profile(name: str, policy_yaml_path: Path) -> CkptProfile:
         kd_damping=kd_damping,
         command_min=command_min,
         command_max=command_max,
+        command_default=command_default,
         default_q_obs=default_q_obs,
         default_q_sdk=default_q_sdk,
     )
@@ -249,12 +252,27 @@ def command_range(policy: BasePolicy) -> tuple[np.ndarray, np.ndarray]:
             observation_spec["command_range"],
             dtype=np.float64,
         )
-        if command_range_array.shape != (3, 2):
+        if command_range_array.ndim != 2 or command_range_array.shape[1] != 2:
             raise ValueError(
-                f"command_range must have shape (3, 2), got {command_range_array.shape}"
+                f"command_range must have shape (N, 2), got {command_range_array.shape}"
             )
         return command_range_array[:, 0], command_range_array[:, 1]
     raise KeyError("policy.yaml observations must include type: command")
+
+
+def command_default_array(
+    policy: BasePolicy,
+    command_min: np.ndarray,
+    command_max: np.ndarray,
+) -> np.ndarray:
+    dim = int(command_min.size)
+    values = policy.config.get("command_default", [0.0] * dim)
+    command_default = np.asarray(values, dtype=np.float64).reshape(-1)
+    if command_default.size != dim:
+        raise ValueError(f"command_default has {command_default.size} values, expected {dim}")
+    if np.any(command_default < command_min) or np.any(command_default > command_max):
+        raise ValueError("command_default must be within command_range")
+    return command_default
 
 
 def check_profile_compatibility(profiles: dict[str, CkptProfile]) -> None:
@@ -270,6 +288,12 @@ def check_profile_compatibility(profiles: dict[str, CkptProfile]) -> None:
                 "all switchable ckpts must use the same policy_step_dt; "
                 f"{profile.name!r}={profile.policy.policy_step_dt}, "
                 f"{first.name!r}={first.policy.policy_step_dt}"
+            )
+        if profile.command_min.size != first.command_min.size:
+            raise ValueError(
+                "all switchable ckpts must use the same command dimension; "
+                f"{profile.name!r}={profile.command_min.size}, "
+                f"{first.name!r}={first.command_min.size}"
             )
 
 

@@ -19,23 +19,25 @@ obs_joint_order: [
 ]
 
 sdk_joint_order: [
-  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
-  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
-  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+  'FR_hip_joint', 'FR_thigh_joint', 'FR_calf_joint',
+  'FL_hip_joint', 'FL_thigh_joint', 'FL_calf_joint',
+  'RR_hip_joint', 'RR_thigh_joint', 'RR_calf_joint',
+  'RL_hip_joint', 'RL_thigh_joint', 'RL_calf_joint',
 ]
 
 # Default joint positions in sdk_joint_order.
 default_qpos: [
-  0.1, -0.1, 0.1, -0.1,
-  0.8, 0.8, 1.0, 1.0,
-  -1.5, -1.5, -1.5, -1.5,
+  -0.1, 0.8, -1.5,
+  0.1, 0.8, -1.5,
+  -0.1, 1.0, -1.5,
+  0.1, 1.0, -1.5,
 ]
 
 policy_input_name: "policy"
 policy_output_name: "loc"
 
 # Training command is [linvel_x, linvel_y, yaw_rate, base_height].
-command_default: [0.0, 0.0, 0.0, 0.4]
+command_default: [0.0, 0.0, 0.0, 0.5]
 command_names: [linvel_x, linvel_y, yaw_rate, base_height]
 
 obs_use_scaled_prev_action: false

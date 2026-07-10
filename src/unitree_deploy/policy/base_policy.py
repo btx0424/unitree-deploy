@@ -164,6 +164,8 @@ class BasePolicy:
     def _build_observation(self, observation_spec: dict) -> ObservationBase:
         observation_type = observation_spec["type"]
         kwargs: dict[str, object] = {"history_len": int(observation_spec["history_len"])}
+        if "history_order" in observation_spec:
+            kwargs["history_order"] = str(observation_spec["history_order"])
         params = observation_spec.get("params", {})
         if params is None:
             params = {}

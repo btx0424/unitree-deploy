@@ -116,8 +116,7 @@ class Controller:
         self.sdk_joint_order = list(self.active_profile.sdk_joint_order)
         self.obs_joint_order = list(self.active_profile.obs_joint_order)
         self.num_joints = len(self.sdk_joint_order)
-        command_dim = int(self.active_profile.command_min.size)
-        self.raw_command = np.zeros(command_dim, dtype=np.float64)
+        self.raw_command = self.active_profile.command_default.copy()
         self.zero = np.zeros(self.num_joints, dtype=np.float64)
         self.target_sdk = np.zeros(self.num_joints, dtype=np.float32)
 
@@ -134,8 +133,8 @@ class Controller:
         self.dq = np.zeros(self.num_joints, dtype=np.float64)
         self.quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.gyro = np.zeros(3, dtype=np.float64)
-        self.command = np.zeros(command_dim, dtype=np.float64)
-        self.last_policy_command = np.zeros(command_dim, dtype=np.float64)
+        self.command = self.active_profile.command_default.copy()
+        self.last_policy_command = self.active_profile.command_default.copy()
         self.remote = RemoteCommand()
         self.log = log
 
@@ -172,6 +171,17 @@ class Controller:
         np.take(value, self.active_profile.obs_to_sdk, out=self.target_sdk)
         return self.target_sdk
 
+    def update_command_from_remote(self) -> None:
+        profile = self.active_profile
+        self.raw_command[:] = profile.command_default
+        joystick_command = np.asarray(
+            [self.remote.ly, -self.remote.lx, -self.remote.rx],
+            dtype=np.float64,
+        )
+        copy_dim = min(self.raw_command.size, joystick_command.size)
+        self.raw_command[:copy_dim] = joystick_command[:copy_dim]
+        np.clip(self.raw_command, profile.command_min, profile.command_max, out=self.command)
+
     # ----- Real-robot setup -----
 
     def enter_debug_mode(self) -> None:
@@ -202,9 +212,7 @@ class Controller:
             self.quat[:] = np.asarray(msg.imu_state.quaternion[:4], dtype=np.float64)
             self.gyro[:] = np.asarray(msg.imu_state.gyroscope[:3], dtype=np.float64)
             self.remote.set(msg.wireless_remote)
-            self.raw_command[:] = [self.remote.ly, -self.remote.lx, -self.remote.rx]
-            profile = self.active_profile
-            np.clip(self.raw_command, profile.command_min, profile.command_max, out=self.command)
+            self.update_command_from_remote()
             self.has_low_state = True
 
     def observation(self) -> ObservationContext:
@@ -238,7 +246,7 @@ class Controller:
         with self.lock:
             profile = self.policy_manager.switch_to(name)
             self.obs_joint_order = list(profile.obs_joint_order)
-            np.clip(self.raw_command, profile.command_min, profile.command_max, out=self.command)
+            self.update_command_from_remote()
         log(f"policy -> {name} ({profile.policy_yaml_path})")
         if self.policy_manager.switch.on_switch:
             self.transition(self.policy_manager.switch.on_switch, force=True)
@@ -253,7 +261,7 @@ class Controller:
         with self.lock:
             profile = self.policy_manager.switch_next()
             self.obs_joint_order = list(profile.obs_joint_order)
-            np.clip(self.raw_command, profile.command_min, profile.command_max, out=self.command)
+            self.update_command_from_remote()
         log(f"policy -> {profile.name} ({profile.policy_yaml_path})")
         if self.policy_manager.switch.on_switch:
             self.transition(self.policy_manager.switch.on_switch, force=True)
@@ -350,12 +358,13 @@ class Controller:
             now = time.perf_counter()
             if now - last_log >= 1.0:
                 command = self.last_policy_command
+                command_text = " ".join(f"{value:+.2f}" for value in command)
                 state_style = "green" if self.state == RUN_POLICY_STATE else "yellow"
                 status(
                     [
                         ("state", self.state, state_style),
                         ("policy", self.active_profile_name, "cyan"),
-                        ("cmd", f"{command[0]:+.2f} {command[1]:+.2f} {command[2]:+.2f}", "white"),
+                        ("cmd", command_text, "white"),
                         ("lowstate", "yes" if ready else "no", "green" if ready else "red"),
                     ]
                 )
