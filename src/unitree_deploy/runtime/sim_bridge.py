@@ -30,6 +30,8 @@ from unitree_deploy.config.defaults import (
     SIM_HZ,
     SIM_REMOTE_BUTTON_KEYS,
     STATE_HZ,
+    Z1_LOWCMD_TOPIC,
+    Z1_LOWSTATE_TOPIC,
 )
 from unitree_deploy.robot_model.robot_config import (
     DEFAULT_ROBOT,
@@ -44,8 +46,15 @@ from unitree_sdk2py.core.channel import (
     ChannelPublisher,
     ChannelSubscriber,
 )
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
+from unitree_sdk2py.idl.default import (
+    unitree_go_msg_dds__MotorState_,
+    unitree_go_msg_dds__SportModeState_,
+)
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import (
+    MotorCmds_,
+    MotorStates_,
+    SportModeState_,
+)
 from unitree_sdk2py.utils.crc import CRC
 from unitree_deploy.runtime.unitree_dds import resolve_low_level_dds
 from unitree_deploy.utils.terminal_status import ComponentConsole
@@ -154,14 +163,16 @@ class SimBridge:
     """MuJoCo <-> Unitree DDS bridge used for sim2sim validation.
 
     Data flow:
-      LowCmd -> MuJoCo PD control -> physics step -> LowState/Odom DDS topics
+      LowCmd/MotorCmds -> MuJoCo PD control -> physics step
+      -> LowState/MotorStates/Odom DDS topics
       keyboard -> wireless_remote bytes and optional suspension-band controls
     """
 
     def __init__(self, config: RuntimeConfig):
         self.config = config
         self.alive = True
-        self.command_received = False
+        self.base_command_received = False
+        self.z1_command_received = False
         self.simulation_paused = True
         self.tick = 1
         self.mode_machine = HG_MODE_MACHINE
@@ -185,6 +196,15 @@ class SimBridge:
             log=log,
         )
         self.num_motor = int(self.model.nu)
+        self.motor_names = self.actuator_names()
+        self.z1_motor_indices = np.asarray(
+            [i for i, name in enumerate(self.motor_names) if name.startswith("z1_")],
+            dtype=np.int64,
+        )
+        self.base_motor_indices = np.asarray(
+            [i for i, name in enumerate(self.motor_names) if not name.startswith("z1_")],
+            dtype=np.int64,
+        )
         self.motor_joint_ids = self.actuator_joint_ids()
         self.motor_qposadr = self.model.jnt_qposadr[self.motor_joint_ids].astype(np.int64)
         self.motor_dofadr = self.model.jnt_dofadr[self.motor_joint_ids].astype(np.int64)
@@ -265,6 +285,13 @@ class SimBridge:
         self.odom_pub.Init()
         self.lowcmd_sub = ChannelSubscriber(self.dds.lowcmd_topic, self.dds.lowcmd_type)
         self.lowcmd_sub.Init(self.on_lowcmd)
+        self.z1_lowstate_pub = None
+        self.z1_lowcmd_sub = None
+        if self.z1_motor_indices.size:
+            self.z1_lowstate_pub = ChannelPublisher(Z1_LOWSTATE_TOPIC, MotorStates_)
+            self.z1_lowstate_pub.Init()
+            self.z1_lowcmd_sub = ChannelSubscriber(Z1_LOWCMD_TOPIC, MotorCmds_)
+            self.z1_lowcmd_sub.Init(self.on_z1_lowcmd)
 
         self.state_thread = threading.Thread(target=self.publish_state_loop, daemon=False)
 
@@ -275,6 +302,12 @@ class SimBridge:
         signal.signal(signal.SIGTERM, self.close)
 
     # ----- MuJoCo model lookup helpers -----
+
+    def actuator_names(self) -> list[str]:
+        return [
+            mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or ""
+            for i in range(self.num_motor)
+        ]
 
     def actuator_joint_ids(self) -> np.ndarray:
         joint_ids = np.zeros(self.num_motor, dtype=np.int32)
@@ -409,6 +442,14 @@ class SimBridge:
 
     # ----- DDS input: LowCmd from controller.py -----
 
+    def update_motor_command(self, motor_index: int, cmd) -> None:
+        self.target_q[motor_index] = float(cmd.q)
+        self.target_dq[motor_index] = float(cmd.dq)
+        self.kp[motor_index] = float(cmd.kp)
+        self.kd[motor_index] = float(cmd.kd)
+        self.tau_ff[motor_index] = float(cmd.tau)
+        self.motor_enable[motor_index] = int(getattr(cmd, "mode", 1)) != 0
+
     def on_lowcmd(self, msg) -> None:
         if msg is None:
             return
@@ -416,16 +457,24 @@ class SimBridge:
         with self.cmd_lock:
             self.mode_machine = int(getattr(msg, "mode_machine", self.mode_machine))
             self.mode_pr = int(getattr(msg, "mode_pr", self.mode_pr))
-            motor_count = min(self.num_motor, len(msg.motor_cmd))
-            for i in range(motor_count):
-                cmd = msg.motor_cmd[i]
-                self.target_q[i] = float(cmd.q)
-                self.target_dq[i] = float(cmd.dq)
-                self.kp[i] = float(cmd.kp)
-                self.kd[i] = float(cmd.kd)
-                self.tau_ff[i] = float(cmd.tau)
-                self.motor_enable[i] = int(getattr(cmd, "mode", 1)) != 0
-            self.command_received = True
+            motor_count = min(self.base_motor_indices.size, len(msg.motor_cmd))
+            for message_index in range(motor_count):
+                motor_index = self.base_motor_indices[message_index]
+                cmd = msg.motor_cmd[message_index]
+                self.update_motor_command(motor_index, cmd)
+            self.base_command_received = True
+
+    def on_z1_lowcmd(self, msg) -> None:
+        if msg is None:
+            return
+
+        with self.cmd_lock:
+            motor_count = min(self.z1_motor_indices.size, len(msg.cmds))
+            for message_index in range(motor_count):
+                motor_index = self.z1_motor_indices[message_index]
+                cmd = msg.cmds[message_index]
+                self.update_motor_command(motor_index, cmd)
+            self.z1_command_received = True
 
     # ----- Keyboard controls and virtual wireless remote -----
 
@@ -590,10 +639,12 @@ class SimBridge:
             msg.mode_machine = int(self.mode_machine)
         msg.tick = int(self.tick)
 
-        for i in range(self.num_motor):
-            msg.motor_state[i].q = float(qpos[self.motor_qposadr[i]])
-            msg.motor_state[i].dq = float(qvel[self.motor_dofadr[i]])
-            msg.motor_state[i].tau_est = float(ctrl[i])
+        motor_count = min(self.base_motor_indices.size, len(msg.motor_state))
+        for message_index in range(motor_count):
+            motor_index = self.base_motor_indices[message_index]
+            msg.motor_state[message_index].q = float(qpos[self.motor_qposadr[motor_index]])
+            msg.motor_state[message_index].dq = float(qvel[self.motor_dofadr[motor_index]])
+            msg.motor_state[message_index].tau_est = float(ctrl[motor_index])
 
         self.fill_imu(msg, qpos[3:7], gyro, acc)
         msg.wireless_remote = self.remote_bytes()
@@ -609,6 +660,19 @@ class SimBridge:
         self.fill_imu_state(msg, quat, gyro, acc)
         return msg
 
+    def make_z1_lowstate(self, qpos, qvel, ctrl) -> MotorStates_:
+        msg = MotorStates_()
+        for motor_index in self.z1_motor_indices:
+            state = unitree_go_msg_dds__MotorState_()
+            state.mode = 1
+            state.q = float(qpos[self.motor_qposadr[motor_index]])
+            state.dq = float(qvel[self.motor_dofadr[motor_index]])
+            state.tau_est = float(ctrl[motor_index])
+            state.temperature = 0
+            state.lost = 0
+            msg.states.append(state)
+        return msg
+
     def make_odom(self, qpos, qvel, gyro, acc) -> SportModeState_:
         msg = unitree_go_msg_dds__SportModeState_()
         msg.position = qpos[:3].tolist()
@@ -621,8 +685,6 @@ class SimBridge:
         while self.alive:
             qpos, qvel, ctrl, gyro, acc, secondary_imu = self.state_snapshot()
             self.lowstate_pub.Write(self.make_lowstate(qpos, qvel, ctrl, gyro, acc))
-            if self.secondary_imu_pub is not None and secondary_imu is not None:
-                self.secondary_imu_pub.Write(self.make_secondary_imu(*secondary_imu))
             self.odom_pub.Write(self.make_odom(qpos, qvel, gyro, acc))
             timer.sleep()
 
@@ -659,16 +721,37 @@ class SimBridge:
                     )
                 else:
                     command = self.current_command()
-                    status(
-                        [
-                            ("state", "running", "green"),
-                            ("t", f"{steps / SIM_HZ:6.2f}s", "cyan"),
-                            ("height", f"{self.data.qpos[2]:.3f}m", "magenta"),
-                            ("remote", f"{command[0]:+.2f} {command[1]:+.2f} {command[2]:+.2f}", "white"),
-                            ("cmd", "yes" if self.command_received else "no", "green" if self.command_received else "yellow"),
-                            ("band", "on" if self.band_on else "off", "green" if self.band_on else "red"),
-                        ]
+                    fields = [
+                        ("state", "running", "green"),
+                        ("t", f"{steps / SIM_HZ:6.2f}s", "cyan"),
+                        ("height", f"{self.data.qpos[2]:.3f}m", "magenta"),
+                        (
+                            "remote",
+                            f"{command[0]:+.2f} {command[1]:+.2f} {command[2]:+.2f}",
+                            "white",
+                        ),
+                        (
+                            "base_cmd",
+                            "yes" if self.base_command_received else "no",
+                            "green" if self.base_command_received else "yellow",
+                        ),
+                    ]
+                    if self.z1_motor_indices.size:
+                        fields.append(
+                            (
+                                "z1_cmd",
+                                "yes" if self.z1_command_received else "no",
+                                "green" if self.z1_command_received else "yellow",
+                            )
+                        )
+                    fields.append(
+                        (
+                            "band",
+                            "on" if self.band_on else "off",
+                            "green" if self.band_on else "red",
+                        )
                     )
+                    status(fields)
                 last_log = now
             timer.sleep()
 
@@ -682,6 +765,12 @@ class SimBridge:
             f"topics: lowcmd={self.dds.lowcmd_topic}, lowstate={self.dds.lowstate_topic}, "
             f"secondary_imu={self.dds.secondary_imu_topic or 'none'}, odom={ODOM_TOPIC}"
         )
+        log(
+            f"actuators: base={self.base_motor_indices.size}, "
+            f"z1={self.z1_motor_indices.size}"
+        )
+        if self.z1_motor_indices.size:
+            log(f"z1 topics: lowcmd={Z1_LOWCMD_TOPIC}, lowstate={Z1_LOWSTATE_TOPIC}")
         log(f"sim={SIM_HZ}Hz state_pub={STATE_HZ}Hz viewer={self.config.viewer}")
         log(f"simulation starts paused; press \"space\" to continue")
         if self.band_on:
@@ -703,9 +792,7 @@ class SimBridge:
 
     def cleanup(self) -> None:
         self.alive = False
-        for obj in (self.lowcmd_sub, self.lowstate_pub, self.secondary_imu_pub, self.odom_pub):
-            if obj is None:
-                continue
+        for obj in (self.lowcmd_sub, self.lowstate_pub, self.odom_pub):
             try:
                 obj.Close()
             except Exception:

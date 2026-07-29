@@ -148,8 +148,25 @@ unitree-z1-controller \
   --ckpt ckpt/b2z1/b2z1_manip
 ```
 
-Simulation mode never starts the UDP bridge. It waits for a simulator to
-implement the same Z1 DDS topics:
+Simulation mode never starts the UDP bridge. For B2Z1 sim2sim, start the
+MuJoCo bridge first:
+
+```bash
+unitree-sim-bridge --robot b2z1 --net lo
+```
+
+Run the B2 locomotion controller when the simulated base also needs active
+control:
+
+```bash
+unitree-controller \
+  --mode sim \
+  --robot b2z1 \
+  --net lo \
+  --ckpt ckpt/b2z1/b2z1_loco
+```
+
+Then run the Z1 controller:
 
 ```bash
 unitree-z1-controller \
@@ -159,7 +176,10 @@ unitree-z1-controller \
 ```
 
 The controller starts in damping and never moves the arm automatically.
-The current MuJoCo bridge does not implement the Z1 DDS topics yet.
+The bridge maps `rt/lowcmd`/`rt/lowstate` to the 12 B2 actuators and
+`rt/z1/lowcmd`/`rt/z1/lowstate` to the 7 Z1 actuators. Both controllers consume
+the same simulated wireless remote, so `A`, `Start`, and `X` affect both state
+machines when they run together.
 
 ## 🧩 Deployment Folders
 

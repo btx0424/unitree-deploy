@@ -67,8 +67,6 @@ class Z1ControlProfile:
     kp_impedance: np.ndarray
     kd_impedance: np.ndarray
     kd_damping: np.ndarray
-    joint_pos_min: np.ndarray
-    joint_pos_max: np.ndarray
     control_dt: float
     state_timeout: float
     state_machine: dict[str, Any]
@@ -77,7 +75,6 @@ class Z1ControlProfile:
 def load_z1_profile(path: Path) -> Z1ControlProfile:
     config = load_yaml(path)
     joint_order = [str(name) for name in config["sdk_joint_order"]]
-    position_range = np.asarray(config["joint_pos_range"], dtype=np.float64)
     identity = np.arange(len(joint_order), dtype=np.int64)
     return Z1ControlProfile(
         sdk_joint_order=joint_order,
@@ -89,8 +86,6 @@ def load_z1_profile(path: Path) -> Z1ControlProfile:
         kp_impedance=np.asarray(config["kp_impedance"], dtype=np.float64),
         kd_impedance=np.asarray(config["kd_impedance"], dtype=np.float64),
         kd_damping=np.asarray(config["kd_damping"], dtype=np.float64),
-        joint_pos_min=position_range[:, 0],
-        joint_pos_max=position_range[:, 1],
         control_dt=float(config["control_dt"]),
         state_timeout=float(config["state_timeout"]),
         state_machine=config["state_machine"],
@@ -212,10 +207,6 @@ class Z1Controller:
         tau_ff: np.ndarray | None = None,
     ) -> None:
         target_q = np.asarray(target_q, dtype=np.float64)
-        if np.any(target_q < self.profile.joint_pos_min) or np.any(
-            target_q > self.profile.joint_pos_max
-        ):
-            raise ValueError("Z1 target_q is outside joint_pos_range")
         target_dq = self.zero if target_dq is None else target_dq
         tau_ff = self.zero if tau_ff is None else tau_ff
         for index, cmd in enumerate(self.low_cmd.cmds):

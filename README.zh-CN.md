@@ -128,7 +128,23 @@ unitree-z1-controller \
   --ckpt ckpt/b2z1/b2z1_manip
 ```
 
-sim 模式不会启动 UDP bridge，而是等待仿真器实现相同的 Z1 DDS topic：
+sim 模式不会启动 UDP bridge。B2Z1 sim2sim 先启动 MuJoCo bridge：
+
+```bash
+unitree-sim-bridge --robot b2z1 --net lo
+```
+
+如果仿真中的 B2 底盘也需要主动控制，再启动 locomotion controller：
+
+```bash
+unitree-controller \
+  --mode sim \
+  --robot b2z1 \
+  --net lo \
+  --ckpt ckpt/b2z1/b2z1_loco
+```
+
+然后启动 Z1 controller：
 
 ```bash
 unitree-z1-controller \
@@ -137,8 +153,10 @@ unitree-z1-controller \
   --ckpt ckpt/b2z1/b2z1_manip
 ```
 
-控制器启动后保持 damping，不会自动移动机械臂。当前 MuJoCo sim bridge
-尚未实现 Z1 DDS topic。
+控制器启动后保持 damping，不会自动移动机械臂。bridge 将
+`rt/lowcmd`/`rt/lowstate` 映射到 12 个 B2 actuator，将
+`rt/z1/lowcmd`/`rt/z1/lowstate` 映射到 7 个 Z1 actuator。两个 controller
+共用同一份仿真遥控器，因此同时运行时，`A`、`Start` 和 `X` 会作用于两个状态机。
 
 ## 🧩 部署目录
 
