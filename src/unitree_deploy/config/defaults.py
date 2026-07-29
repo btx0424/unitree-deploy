@@ -9,6 +9,13 @@ LOWSTATE_TOPIC = "rt/lowstate"
 SECONDARY_IMU_TOPIC = "rt/secondary_imu"
 ODOM_TOPIC = "rt/odommodestate"
 
+Z1_LOWCMD_TOPIC = "rt/z1/lowcmd"
+Z1_LOWSTATE_TOPIC = "rt/z1/lowstate"
+Z1_UDP_SERVICE_PATH = "/home/unitree/zhudj/Z1/z1_controller/deploy/x86_64/z1_udp_service"
+Z1_UDP_NAMESPACE = "z1"
+Z1_ROBOT_IP = "192.168.123.110"
+Z1_LOCAL_PORT = 8881
+
 SIM_HZ = 500
 STATE_HZ = 200
 RENDER_HZ = 30

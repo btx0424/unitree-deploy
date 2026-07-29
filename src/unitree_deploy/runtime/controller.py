@@ -1,6 +1,5 @@
 import argparse
 import signal
-import struct
 import threading
 import time
 from dataclasses import dataclass
@@ -20,6 +19,7 @@ from unitree_deploy.config.defaults import (
 from unitree_deploy.obs.observation import ObservationContext
 from unitree_deploy.robot_model.robot_config import DEFAULT_ROBOT
 from unitree_deploy.runtime.multi_ckpt import PolicyManager
+from unitree_deploy.runtime.remote import RemoteCommand
 from unitree_deploy.runtime.controller_state_machine import (
     ControllerStateMachine,
     load_state_machine_config,
@@ -69,32 +69,6 @@ class RuntimeConfig:
     robot: str | None
     multi_ckpt: Path | None = None
     state_machine: Path | None = None
-
-
-class RemoteCommand:
-    def __init__(self) -> None:
-        self.lx = self.ly = self.rx = self.ry = 0.0
-        self.buttons = {name: False for name in WIRELESS_REMOTE_BUTTON_BITS}
-        self.pressed_edges: set[str] = set()
-
-    def set(self, wireless_remote) -> None:
-        payload = bytes(wireless_remote)
-        self.lx = struct.unpack("<f", payload[4:8])[0]
-        self.rx = struct.unpack("<f", payload[8:12])[0]
-        self.ry = struct.unpack("<f", payload[12:16])[0]
-        self.ly = struct.unpack("<f", payload[20:24])[0]
-
-        for name, (byte_i, bit_i) in WIRELESS_REMOTE_BUTTON_BITS.items():
-            pressed = bool((int(wireless_remote[byte_i]) >> bit_i) & 1)
-            if pressed and not self.buttons[name]:
-                self.pressed_edges.add(name)
-            self.buttons[name] = pressed
-
-    def button_pressed(self, name: str) -> bool:
-        if name not in self.pressed_edges:
-            return False
-        self.pressed_edges.remove(name)
-        return True
 
 
 class Controller:
@@ -262,6 +236,9 @@ class Controller:
 
     def transition(self, state: str, *, force: bool = False) -> None:
         self.state_machine.transition(state, force=force)
+
+    def on_state_transition(self) -> None:
+        self.active_profile.policy.reset()
 
     def switch_to_policy(self, name: str) -> bool:
         if name == self.active_profile_name:

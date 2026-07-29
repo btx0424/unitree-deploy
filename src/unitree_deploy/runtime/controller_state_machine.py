@@ -177,10 +177,40 @@ class PolicyState(ControllerState):
         return None
 
 
+class ImpedanceState(ControllerState):
+    state_type = "impedance"
+
+    def __init__(self, name: str, config: Mapping[str, Any]) -> None:
+        super().__init__(name, config)
+        self.target_spec = config.get("target", "default_q")
+        self.target_order = str(config.get("target_order", "sdk"))
+        self.kp_spec = config.get("kp", "impedance")
+        self.kd_spec = config.get("kd", "impedance")
+        self.target_q_obs: np.ndarray | None = None
+
+    def on_enter(self, controller) -> None:
+        self.target_q_obs = resolve_target_q(
+            controller,
+            self.target_spec,
+            self.target_order,
+        )
+
+    def step(self, controller) -> str | None:
+        if self.target_q_obs is None:
+            self.on_enter(controller)
+        controller.send_joint_cmd(
+            controller.reorder_policy_to_sdk(self.target_q_obs),
+            resolve_kp(controller, self.kp_spec),
+            resolve_kd(controller, self.kd_spec),
+        )
+        return None
+
+
 STATE_TYPES = {
     DampingState.state_type: DampingState,
     MoveToTargetPosState.state_type: MoveToTargetPosState,
     PolicyState.state_type: PolicyState,
+    ImpedanceState.state_type: ImpedanceState,
 }
 
 
@@ -209,7 +239,7 @@ class ControllerStateMachine:
         self.current_name = state
         self.controller.state = state
         self.controller.state_enter_t = time.perf_counter()
-        self.controller.active_profile.policy.reset()
+        self.controller.on_state_transition()
         self.current.on_enter(self.controller)
         self.controller.log(f"state -> {state}")
 
@@ -309,6 +339,8 @@ def resolve_kp(controller, spec: Any) -> np.ndarray:
         return profile.kp_fixed_stand
     if spec == "policy":
         return profile.kp_policy
+    if spec == "impedance":
+        return profile.kp_impedance
     return gain_array(controller, spec, "kp")
 
 
@@ -318,6 +350,8 @@ def resolve_kd(controller, spec: Any) -> np.ndarray:
         return profile.kd_fixed_stand
     if spec == "policy":
         return profile.kd_policy
+    if spec == "impedance":
+        return profile.kd_impedance
     if spec == "damping":
         return profile.kd_damping
     return gain_array(controller, spec, "kd")

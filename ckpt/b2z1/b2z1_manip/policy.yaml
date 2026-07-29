@@ -1,0 +1,56 @@
+robot: b2z1
+
+sdk_joint_order:
+  - z1_waist
+  - z1_shoulder
+  - z1_elbow
+  - z1_wrist_angle
+  - z1_forearm_roll
+  - z1_wrist_rotate
+  - z1_jointGripper
+
+default_qpos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+joint_pos_range:
+  - [-2.61799, 2.61799]
+  - [0.0, 2.96706]
+  - [-2.87979, 0.0]
+  - [-1.51844, 1.51844]
+  - [-1.3439, 1.3439]
+  - [-2.79253, 2.79253]
+  - [-1.5708, 0.0]
+
+# Converted from the legacy Z1 SDK gains used by z1_control_unitree_sdk2.
+kp_fixed_stand: [512.0, 768.0, 768.0, 512.0, 384.0, 256.0, 512.0]
+kd_fixed_stand: [25.6, 25.6, 25.6, 25.6, 25.6, 25.6, 25.6]
+kp_impedance: [512.0, 768.0, 768.0, 512.0, 384.0, 256.0, 512.0]
+kd_impedance: [25.6, 25.6, 25.6, 25.6, 25.6, 25.6, 25.6]
+kd_damping: [25.6, 25.6, 25.6, 25.6, 25.6, 25.6, 25.6]
+
+control_dt: 0.004
+state_timeout: 0.2
+
+state_machine:
+  initial: damped
+  states:
+    damped:
+      type: damping
+      transitions:
+        A: move_to_default_qpos
+    move_to_default_qpos:
+      type: move_to_target_pos
+      target: default_q
+      duration: 5.0
+      kp: fixed_stand
+      kd: fixed_stand
+      transitions:
+        Start: impedance
+        X: damped
+    impedance:
+      type: impedance
+      target: default_q
+      kp: impedance
+      kd: impedance
+      transitions:
+        A: move_to_default_qpos
+        X: damped

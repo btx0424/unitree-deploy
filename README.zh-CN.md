@@ -110,6 +110,36 @@ web-policy --robot g1 --ckpt /home/syw/.gitrepos/unitree-deploy/ckpt/g1/vanilla_
 unitree-controller --mode real --net <interface> --ckpt ckpt/g1/vanilla_ppo_flat
 ```
 
+### Z1 阻抗控制器
+
+Z1 控制器复用 locomotion controller 的 `A`/`Start`/`X` 状态机操作：
+
+- `A`：从机械臂当前实测姿态移动到 `default_qpos`。
+- `Start`：默认姿态移动完成后进入阻抗模式。
+- `X`：回到 damping。
+
+real 模式会自动启动固定配置的 `z1_udp_service`，并连接
+`rt/z1/lowstate` 和 `rt/z1/lowcmd`：
+
+```bash
+unitree-z1-controller \
+  --mode real \
+  --net <interface> \
+  --ckpt ckpt/b2z1/b2z1_manip
+```
+
+sim 模式不会启动 UDP bridge，而是等待仿真器实现相同的 Z1 DDS topic：
+
+```bash
+unitree-z1-controller \
+  --mode sim \
+  --net lo \
+  --ckpt ckpt/b2z1/b2z1_manip
+```
+
+控制器启动后保持 damping，不会自动移动机械臂。当前 MuJoCo sim bridge
+尚未实现 Z1 DDS topic。
+
 ## 🧩 部署目录
 
 一个 policy deployment 目录通常包含：

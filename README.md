@@ -129,6 +129,38 @@ environment.
     unitree-controller --mode real --net <interface> --ckpt ckpt/g1/vanilla_ppo_flat
     ```
 
+### Z1 Impedance Controller
+
+The Z1 controller uses the same `A`/`Start`/`X` state-machine flow as the
+locomotion controller:
+
+- `A`: move from the measured arm pose to `default_qpos`.
+- `Start`: enter impedance mode after the default-pose move completes.
+- `X`: return to damping.
+
+Real mode automatically starts the fixed `z1_udp_service` bridge and uses
+`rt/z1/lowstate` and `rt/z1/lowcmd`:
+
+```bash
+unitree-z1-controller \
+  --mode real \
+  --net <interface> \
+  --ckpt ckpt/b2z1/b2z1_manip
+```
+
+Simulation mode never starts the UDP bridge. It waits for a simulator to
+implement the same Z1 DDS topics:
+
+```bash
+unitree-z1-controller \
+  --mode sim \
+  --net lo \
+  --ckpt ckpt/b2z1/b2z1_manip
+```
+
+The controller starts in damping and never moves the arm automatically.
+The current MuJoCo bridge does not implement the Z1 DDS topics yet.
+
 ## 🧩 Deployment Folders
 
 A policy deployment folder usually looks like this:
