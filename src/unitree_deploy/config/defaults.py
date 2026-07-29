@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 DEFAULT_NET = "lo"
 DEFAULT_MODE = "sim"
@@ -11,7 +13,9 @@ ODOM_TOPIC = "rt/odommodestate"
 
 Z1_LOWCMD_TOPIC = "rt/z1/lowcmd"
 Z1_LOWSTATE_TOPIC = "rt/z1/lowstate"
-Z1_UDP_SERVICE_PATH = "/home/unitree/zhudj/Z1/z1_controller/deploy/x86_64/z1_udp_service"
+Z1_UDP_SERVICE_PATH = str(
+    Path(__file__).resolve().parents[4] / "z1_controller/deploy/x86_64/z1_udp_service"
+)
 Z1_UDP_NAMESPACE = "z1"
 Z1_ROBOT_IP = "192.168.123.110"
 Z1_LOCAL_PORT = 8881
