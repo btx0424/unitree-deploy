@@ -207,6 +207,13 @@ class BasePolicy:
         self.observation.reset()
         self._observation_needs_prime = self.obs_prime_on_reset
 
+    def _infer_action(self, obs_vector: np.ndarray) -> np.ndarray:
+        outputs = self.session.run(
+            [self.action_output_name],
+            {self.input_name: obs_vector[None, :]},
+        )
+        return np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+
     def compute_target_q(self, context: ObservationContext) -> np.ndarray:
         if self._observation_needs_prime:
             self.observation.prime(context)
@@ -214,11 +221,7 @@ class BasePolicy:
         else:
             self.observation.update(context)
         obs_vector = self.observation.compute().astype(np.float32, copy=False)
-        outputs = self.session.run(
-            [self.action_output_name],
-            {self.input_name: obs_vector[None, :]},
-        )
-        policy_action = np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+        policy_action = self._infer_action(obs_vector)
         self.action[:] = policy_action
         prev_action = self.action * self.action_scaling if self.obs_use_scaled_prev_action else self.action
         self.previous_action_observation.record_action(prev_action)

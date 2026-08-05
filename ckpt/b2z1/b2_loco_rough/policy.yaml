@@ -1,0 +1,123 @@
+# Active-Adaptation B2LocoDreamWaQ student policy deployed on the B2 base of B2Z1.
+# Source: scripts/exports/B2LocoDreamWaQ/policy-08-05_11-42.onnx
+# SHA256: 6d46b00560365b25a956f56a79e261e2b584dc716a1ba57d699f07ae41f5bf54
+
+robot: b2z1
+policy_path: "policy.onnx"
+policy_class: "dreamwaq_policy:DreamWaQPolicy"
+
+policy_step_dt: 0.02
+physics_dt: 0.005
+decimation: 4
+
+# Training order from unitree_b2 JOINT_NAMES_SIMULATION.
+obs_joint_order: [
+  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
+  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
+  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+]
+
+# B2 LowState/LowCmd motor order. Z1 joints are controlled on separate DDS topics.
+sdk_joint_order: [
+  'FR_hip_joint', 'FR_thigh_joint', 'FR_calf_joint',
+  'FL_hip_joint', 'FL_thigh_joint', 'FL_calf_joint',
+  'RR_hip_joint', 'RR_thigh_joint', 'RR_calf_joint',
+  'RL_hip_joint', 'RL_thigh_joint', 'RL_calf_joint',
+]
+
+# Existing B2Z1 locomotion default pose in sdk_joint_order.
+default_qpos: [
+  -0.1, 0.8, -1.5,
+   0.1, 0.8, -1.5,
+  -0.1, 1.0, -1.5,
+   0.1, 1.0, -1.5,
+]
+
+policy_input_name: "policy"
+policy_output_name: "loc"
+policy_init_input_name: "is_init"
+policy_state_input_name: "adapt_hx"
+policy_state_output_name: "next_adapt_hx"
+policy_state_dim: 128
+
+# Runtime command: [linvel_x, linvel_y, yaw_rate, base_height].
+command_default: [0.0, 0.0, 0.0, 0.45]
+command_names: [linvel_x, linvel_y, yaw_rate, base_height]
+
+obs_use_scaled_prev_action: false
+obs_prime_on_reset: false
+obs_group_concat_mode: term_major
+observation_types:
+  command: "unitree_deploy.obs.observation:CommandObservation"
+  base_ang_vel: "unitree_deploy.obs.observation:BaseAngularVelocityObservation"
+  projected_gravity: "unitree_deploy.obs.observation:ProjectedGravityObservation"
+  joint_pos_rel: "unitree_deploy.obs.observation:JointPositionObservation"
+  joint_vel: "unitree_deploy.obs.observation:JointVelocityObservation"
+  prev_action: "unitree_deploy.obs.observation:PreviousActionObservation"
+
+observations:
+  - type: command
+    history_len: 5
+    history_order: newest_first
+    command_range:
+      - [-1.0, 1.6]
+      - [-0.8, 0.8]
+      - [-2.0, 2.0]
+      - [0.45, 0.45]
+  - type: base_ang_vel
+    history_len: 5
+    history_order: newest_first
+  - type: projected_gravity
+    history_len: 5
+    history_order: newest_first
+  - type: joint_pos_rel
+    history_len: 5
+    history_order: newest_first
+  - type: joint_vel
+    history_len: 5
+    history_order: newest_first
+  - type: prev_action
+    history_len: 5
+    history_order: newest_first
+
+action_dim: 12
+action_clip: null
+action_joint_order: [
+  'FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
+  'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
+  'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint',
+]
+action_scale: [
+  0.5, 0.5, 0.5, 0.5,
+  0.5, 0.5, 0.5, 0.5,
+  0.5, 0.5, 0.5, 0.5,
+]
+
+# Nominal training gains in sdk_joint_order.
+kp_policy: [
+  100.0, 100.0, 100.0, 100.0,
+  100.0, 100.0, 100.0, 100.0,
+  100.0, 100.0, 100.0, 100.0,
+]
+kd_policy: [
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+  2.0, 2.0, 2.0, 2.0,
+]
+
+# Reuse the previously validated B2Z1 stand and damping gains.
+kp_fixed_stand: [
+  300.0, 300.0, 300.0, 300.0,
+  300.0, 300.0, 300.0, 300.0,
+  300.0, 300.0, 300.0, 300.0,
+]
+kd_fixed_stand: [
+  4.0, 4.0, 4.0, 4.0,
+  4.0, 4.0, 4.0, 4.0,
+  4.0, 4.0, 4.0, 4.0,
+]
+kd_damping: [
+  100.0, 100.0, 100.0, 100.0,
+  100.0, 100.0, 100.0, 100.0,
+  100.0, 100.0, 100.0, 100.0,
+]
