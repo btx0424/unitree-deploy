@@ -61,10 +61,13 @@ class PolicyManager:
         return self.profiles[self.active_name]
 
     @classmethod
-    def load(cls, ckpt_dir: Path, multi_ckpt: Path | None = None) -> PolicyManager:
-        ckpt_dir = ckpt_dir.expanduser().resolve()
+    def load(cls, ckpt_path: Path, multi_ckpt: Path | None = None) -> PolicyManager:
+        ckpt_path = ckpt_path.expanduser().resolve()
         if multi_ckpt is None:
-            profile = build_ckpt_profile("default", ckpt_dir / "policy.yaml")
+            policy_yaml_path = ckpt_path
+            if ckpt_path.is_dir():
+                policy_yaml_path = ckpt_path / "policy.yaml"
+            profile = build_ckpt_profile("default", policy_yaml_path)
             return cls(
                 {"default": profile},
                 "default",

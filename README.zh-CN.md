@@ -57,6 +57,9 @@ unitree-sim-bridge --robot g1
 
 ```bash
 unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
+
+# 也可以直接指定 policy YAML 文件。
+unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy.yaml
 ```
 
 使用 multi-policy 配置：

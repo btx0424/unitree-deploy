@@ -61,6 +61,9 @@ environment.
 
     ```bash
     unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
+
+    # Or select a policy YAML file directly.
+    unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy.yaml
     ```
 
 - Run with a multi-policy manifest:

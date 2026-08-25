@@ -108,6 +108,8 @@ class Controller:
         self.config = config
         self.ckpt_dir = config.ckpt_dir.expanduser().resolve()
         self.policy_manager = PolicyManager.load(self.ckpt_dir, config.multi_ckpt)
+        if config.multi_ckpt is None:
+            self.ckpt_dir = self.active_profile.policy_yaml_path.parent
         self.robot = config.robot or self.active_profile.policy.config.get("robot", DEFAULT_ROBOT)
         self.dds = resolve_low_level_dds(self.robot)
 
@@ -389,7 +391,11 @@ def parse_args() -> RuntimeConfig:
     parser.add_argument("--mode", choices=("real", "sim"), default=DEFAULT_MODE)
     parser.add_argument("--net", default=DEFAULT_NET, help="DDS network interface. Use lo for local sim.")
     parser.add_argument("--robot", help="Robot name for logs. Defaults to controller.yaml robot.")
-    parser.add_argument("--ckpt", type=Path, help="Checkpoint directory containing policy.yaml.")
+    parser.add_argument(
+        "--ckpt",
+        type=Path,
+        help="Policy YAML file or checkpoint directory containing policy.yaml.",
+    )
     parser.add_argument(
         "--multi-ckpt",
         type=Path,
