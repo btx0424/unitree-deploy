@@ -71,6 +71,22 @@ unitree-controller --mode sim --multi-ckpt ckpt/g1/multi_ckpt.yaml
 unitree-visualizer --mode sim --robot g1
 ```
 
+回放已保存的轨迹，默认使用 Viser 前端：
+
+```bash
+unitree-trajectory-replay export/runs/g1_walk/20260629-153012/trajectory.npz
+```
+
+也可以切到原生 MuJoCo Viewer：
+
+```bash
+unitree-trajectory-replay \
+  --viewer mujoco \
+  export/runs/g1_walk/20260629-153012/trajectory.npz
+```
+
+MuJoCo Viewer 前端支持 `space` 播放/暂停，左右方向键逐帧步进，`r` 回到开头，`+/-` 调速，`l` 切换循环播放。
+
 浏览器里的 policy 展示已经移到独立的 `web_policy` 项目：
 
 ```bash

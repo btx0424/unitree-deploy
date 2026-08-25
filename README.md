@@ -91,15 +91,24 @@ environment.
     as `export/runs/g1_walk/20260629-153012/`, containing `trajectory.npz`,
     `metadata.json`, and `scene.json`.
 
-- Replay a saved trajectory in Viser:
+- Replay a saved trajectory. The default replay frontend is Viser:
 
     ```bash
     unitree-trajectory-replay export/runs/g1_walk/20260629-153012/trajectory.npz
     ```
 
+    To replay in the native MuJoCo Viewer instead:
+
+    ```bash
+    unitree-trajectory-replay \
+      --viewer mujoco \
+      export/runs/g1_walk/20260629-153012/trajectory.npz
+    ```
+
     The replay UI starts paused and follows the robot by default. It includes
     pause, follow, playback speed, frame scrubbing, and one-step forward/back
-    controls.
+    controls. In MuJoCo Viewer, use `space` to play/pause, left/right arrows to
+    step, `r` to restart, `+/-` to change speed, and `l` to toggle looping.
 
 - For browser-based policy presentation, use the separate [`policy-web-viewer`](https://github.com/syw-robotics/policy-web-viewer) project:
 
