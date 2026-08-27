@@ -18,6 +18,8 @@ class CkptProfile:
     name: str
     policy_yaml_path: Path
     policy: BasePolicy
+    imu_source: str | None
+    uses_secondary_imu: bool
     sdk_joint_order: list[str]
     obs_joint_order: list[str]
     sdk_to_obs: np.ndarray
@@ -61,10 +63,13 @@ class PolicyManager:
         return self.profiles[self.active_name]
 
     @classmethod
-    def load(cls, ckpt_dir: Path, multi_ckpt: Path | None = None) -> PolicyManager:
-        ckpt_dir = ckpt_dir.expanduser().resolve()
+    def load(cls, ckpt_path: Path, multi_ckpt: Path | None = None) -> PolicyManager:
+        ckpt_path = ckpt_path.expanduser().resolve()
         if multi_ckpt is None:
-            profile = build_ckpt_profile("default", ckpt_dir / "policy.yaml")
+            policy_yaml_path = ckpt_path
+            if ckpt_path.is_dir():
+                policy_yaml_path = ckpt_path / "policy.yaml"
+            profile = build_ckpt_profile("default", policy_yaml_path)
             return cls(
                 {"default": profile},
                 "default",
@@ -137,6 +142,7 @@ def resolve_policy_yaml(base_dir: Path, spec) -> Path:
 
 def build_ckpt_profile(name: str, policy_yaml_path: Path) -> CkptProfile:
     policy = load_policy(policy_yaml_path)
+    imu_source = parse_imu_source(policy)
     sdk_joint_order = list(policy.sdk_joint_order)
     obs_joint_order = list(policy.obs_joint_order)
     num_joints = len(sdk_joint_order)
@@ -163,6 +169,8 @@ def build_ckpt_profile(name: str, policy_yaml_path: Path) -> CkptProfile:
         name=name,
         policy_yaml_path=policy_yaml_path,
         policy=policy,
+        imu_source=imu_source,
+        uses_secondary_imu=imu_source == "torso",
         sdk_joint_order=sdk_joint_order,
         obs_joint_order=obs_joint_order,
         sdk_to_obs=sdk_to_obs,
@@ -183,6 +191,22 @@ def build_ckpt_profile(name: str, policy_yaml_path: Path) -> CkptProfile:
 def reorder_indices(source: list[str], target: list[str]) -> np.ndarray:
     source_index = {name: i for i, name in enumerate(source)}
     return np.asarray([source_index[name] for name in target], dtype=np.int64)
+
+
+def parse_imu_source(policy: BasePolicy) -> str | None:
+    robot = str(policy.config.get("robot", "")).strip().lower()
+    if robot != "g1":
+        if "imu_source" in policy.config:
+            raise ValueError("imu_source is valid only for robot: g1; remove it for other robots")
+        return None
+
+    if "imu_source" not in policy.config:
+        raise KeyError("G1 policy.yaml must define imu_source as 'pelvis' or 'torso'")
+
+    imu_source = str(policy.config["imu_source"]).strip().lower()
+    if imu_source not in ("pelvis", "torso"):
+        raise ValueError("imu_source must be 'pelvis' or 'torso'")
+    return imu_source
 
 
 def check_joint_config(

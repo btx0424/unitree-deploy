@@ -108,6 +108,8 @@ class Controller:
         self.config = config
         self.ckpt_dir = config.ckpt_dir.expanduser().resolve()
         self.policy_manager = PolicyManager.load(self.ckpt_dir, config.multi_ckpt)
+        if config.multi_ckpt is None:
+            self.ckpt_dir = self.active_profile.policy_yaml_path.parent
         self.robot = config.robot or self.active_profile.policy.config.get("robot", DEFAULT_ROBOT)
         self.dds = resolve_low_level_dds(self.robot)
 
@@ -133,6 +135,9 @@ class Controller:
         self.dq = np.zeros(self.num_joints, dtype=np.float64)
         self.quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.gyro = np.zeros(3, dtype=np.float64)
+        self.torso_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        self.torso_gyro = np.zeros(3, dtype=np.float64)
+        self.has_torso_imu = False
         self.command = self.active_profile.command_default.copy()
         self.last_policy_command = self.active_profile.command_default.copy()
         self.remote = RemoteCommand()
@@ -150,6 +155,15 @@ class Controller:
         self.crc = CRC()
         self.lowstate_sub = ChannelSubscriber(self.lowstate_topic, self.dds.lowstate_type)
         self.lowstate_sub.Init(self.on_lowstate, 1)
+        self.secondary_imu_sub = None
+        if any(profile.uses_secondary_imu for profile in self.policy_manager.profiles.values()):
+            if self.dds.secondary_imu_topic is None or self.dds.secondary_imu_type is None:
+                raise ValueError(f"robot {self.robot!r} does not provide a secondary torso IMU")
+            self.secondary_imu_sub = ChannelSubscriber(
+                self.dds.secondary_imu_topic,
+                self.dds.secondary_imu_type,
+            )
+            self.secondary_imu_sub.Init(self.on_secondary_imu, 1)
         self.lowcmd_pub = ChannelPublisher(self.lowcmd_topic, self.dds.lowcmd_type)
         self.lowcmd_pub.Init()
 
@@ -215,14 +229,28 @@ class Controller:
             self.update_command_from_remote()
             self.has_low_state = True
 
+    def on_secondary_imu(self, msg) -> None:
+        with self.lock:
+            self.torso_quat[:] = np.asarray(msg.quaternion[:4], dtype=np.float64)
+            self.torso_gyro[:] = np.asarray(msg.gyroscope[:3], dtype=np.float64)
+            self.has_torso_imu = True
+
     def observation(self) -> ObservationContext:
         with self.lock:
             profile = self.active_profile
+            q = self.q[profile.sdk_to_obs].copy()
+            dq = self.dq[profile.sdk_to_obs].copy()
+            if profile.uses_secondary_imu:
+                quat = self.torso_quat.copy()
+                gyro = self.torso_gyro.copy()
+            else:
+                quat = self.quat.copy()
+                gyro = self.gyro.copy()
             return ObservationContext(
-                q=self.q[profile.sdk_to_obs].copy(),
-                dq=self.dq[profile.sdk_to_obs].copy(),
-                quat=self.quat.copy(),
-                gyro=self.gyro.copy(),
+                q=q,
+                dq=dq,
+                quat=quat,
+                gyro=gyro,
                 command=self.command.copy(),
             )
 
@@ -322,6 +350,7 @@ class Controller:
         )
         log(
             f"policy={self.active_profile_name} "
+            f"imu={self.active_profile.imu_source or 'lowstate'} "
             f"available={','.join(self.policy_manager.profiles)}"
         )
         log(f"state_machine={self.state_machine_path or 'default'}")
@@ -351,7 +380,9 @@ class Controller:
 
         while self.alive:
             with self.lock:
-                ready = self.has_low_state
+                lowstate_ready = self.has_low_state
+                imu_ready = not self.active_profile.uses_secondary_imu or self.has_torso_imu
+                ready = lowstate_ready and imu_ready
             if ready:
                 self.step()
 
@@ -365,7 +396,18 @@ class Controller:
                         ("state", self.state, state_style),
                         ("policy", self.active_profile_name, "cyan"),
                         ("cmd", command_text, "white"),
-                        ("lowstate", "yes" if ready else "no", "green" if ready else "red"),
+                        (
+                            "lowstate",
+                            "yes" if lowstate_ready else "no",
+                            "green" if lowstate_ready else "red",
+                        ),
+                        (
+                            "imu",
+                            (self.active_profile.imu_source or "lowstate")
+                            if imu_ready
+                            else "waiting for torso",
+                            "green" if imu_ready else "red",
+                        ),
                     ]
                 )
                 last_log = now
@@ -381,6 +423,8 @@ class Controller:
         self.alive = False
         console.stop()
         self.lowstate_sub.Close()
+        if self.secondary_imu_sub is not None:
+            self.secondary_imu_sub.Close()
         self.lowcmd_pub.Close()
 
 
@@ -389,7 +433,11 @@ def parse_args() -> RuntimeConfig:
     parser.add_argument("--mode", choices=("real", "sim"), default=DEFAULT_MODE)
     parser.add_argument("--net", default=DEFAULT_NET, help="DDS network interface. Use lo for local sim.")
     parser.add_argument("--robot", help="Robot name for logs. Defaults to controller.yaml robot.")
-    parser.add_argument("--ckpt", type=Path, help="Checkpoint directory containing policy.yaml.")
+    parser.add_argument(
+        "--ckpt",
+        type=Path,
+        help="Policy YAML file or checkpoint directory containing policy.yaml.",
+    )
     parser.add_argument(
         "--multi-ckpt",
         type=Path,

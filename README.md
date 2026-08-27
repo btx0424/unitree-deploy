@@ -60,7 +60,11 @@ environment.
 - Run a controller against the simulator:
 
     ```bash
+    # By default, it loads `policy.yaml` in the provides ckpt path
     unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
+
+    # Or specify a policy YAML file directly.
+    unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy_torso_base.yaml
     ```
 
 - Run with a multi-policy manifest:
@@ -91,15 +95,24 @@ environment.
     as `export/runs/g1_walk/20260629-153012/`, containing `trajectory.npz`,
     `metadata.json`, and `scene.json`.
 
-- Replay a saved trajectory in Viser:
+- Replay a saved trajectory. The default replay frontend is Viser:
 
     ```bash
     unitree-trajectory-replay export/runs/g1_walk/20260629-153012/trajectory.npz
     ```
 
+    To replay in the native MuJoCo Viewer instead:
+
+    ```bash
+    unitree-trajectory-replay \
+      --viewer mujoco \
+      export/runs/g1_walk/20260629-153012/trajectory.npz
+    ```
+
     The replay UI starts paused and follows the robot by default. It includes
     pause, follow, playback speed, frame scrubbing, and one-step forward/back
-    controls.
+    controls. In MuJoCo Viewer, use `space` to play/pause, left/right arrows to
+    step, `r` to restart, `+/-` to change speed, and `l` to toggle looping.
 
 - For browser-based policy presentation, use the separate [`policy-web-viewer`](https://github.com/syw-robotics/policy-web-viewer) project:
 
@@ -139,6 +152,7 @@ ckpt/<robot>/<policy>/
 
 ```yaml
 policy_path: "policy.onnx"
+imu_source: pelvis  # G1: pelvis or torso
 obs_joint_order: [...]
 action_joint_order: [...]
 sdk_joint_order: [...]
@@ -147,6 +161,11 @@ sdk_joint_order: [...]
 `obs_joint_order`, `action_joint_order`, and `sdk_joint_order` are matched by
 joint name. Reorder indices are derived automatically, so they do not need to be
 written by hand.
+
+G1 policies must set `imu_source` to match training. `pelvis` reads
+`LowState.imu_state`; `torso` subscribes to `rt/secondary_imu`. The simulator
+publishes both sources for G1. Other robots must omit `imu_source` and always
+use their own `LowState.imu_state`.
 
 ## 🔁 Multi-Policy Switching
 

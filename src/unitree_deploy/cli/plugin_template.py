@@ -76,6 +76,9 @@ POLICY_YAML = '''# Fill in the deployment values exported with your policy.
 # Put the ONNX file in this directory, or make policy_path point to its relative path.
 policy_path: "policy.onnx"
 
+# Required for G1 only; leave absent for other robots.
+# imu_source: pelvis  # pelvis: LowState.imu_state; torso: rt/secondary_imu
+
 # Only uncomment this if BasePolicy action post-processing is not enough.
 # policy_class: "custom_policy:CustomPolicy"
 

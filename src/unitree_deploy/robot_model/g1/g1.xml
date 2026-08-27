@@ -366,9 +366,13 @@
     <motor name="right_wrist_yaw" joint="right_wrist_yaw_joint" ctrlrange="-5 5"/>
   </actuator>
   <sensor>
+    <framequat name="imu_quat" objtype="site" objname="imu_in_pelvis"/>
     <gyro name="imu_ang_vel" site="imu_in_pelvis"/>
     <velocimeter name="imu_lin_vel" site="imu_in_pelvis"/>
     <accelerometer name="imu_lin_acc" site="imu_in_pelvis"/>
+    <framequat name="secondary_imu_quat" objtype="site" objname="imu_in_torso"/>
+    <gyro name="secondary_imu_gyro" site="imu_in_torso"/>
+    <accelerometer name="secondary_imu_acc" site="imu_in_torso"/>
     <subtreeangmom name="root_angmom" body="pelvis"/>
   </sensor>
 </mujoco>

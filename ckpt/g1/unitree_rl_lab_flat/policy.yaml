@@ -4,6 +4,7 @@
 #
 
 robot: g1
+imu_source: pelvis  # pelvis: LowState.imu_state; torso: rt/secondary_imu
 policy_path: "policy.onnx"
 
 policy_step_dt: 0.02

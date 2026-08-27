@@ -56,7 +56,11 @@ unitree-sim-bridge --robot g1
 启动仿真 controller：
 
 ```bash
+# ckpt参数如果输入为路径，默认加载其中的policy.yaml文件
 unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
+
+# 也可以直接指定 policy YAML 文件。
+unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy_torso_base.yaml
 ```
 
 使用 multi-policy 配置：
@@ -70,6 +74,22 @@ unitree-controller --mode sim --multi-ckpt ckpt/g1/multi_ckpt.yaml
 ```bash
 unitree-visualizer --mode sim --robot g1
 ```
+
+回放已保存的轨迹，默认使用 Viser 前端：
+
+```bash
+unitree-trajectory-replay export/runs/g1_walk/20260629-153012/trajectory.npz
+```
+
+也可以切到原生 MuJoCo Viewer：
+
+```bash
+unitree-trajectory-replay \
+  --viewer mujoco \
+  export/runs/g1_walk/20260629-153012/trajectory.npz
+```
+
+MuJoCo Viewer 前端支持 `space` 播放/暂停，左右方向键逐帧步进，`r` 回到开头，`+/-` 调速，`l` 切换循环播放。
 
 浏览器里的 policy 展示已经移到独立的 `web_policy` 项目：
 
@@ -114,12 +134,17 @@ unitree-plugin-template ckpt --robot g1 --name my_policy
 
 ```yaml
 policy_path: "policy.onnx"
+imu_source: pelvis  # G1 可选 pelvis 或 torso
 obs_joint_order: [...]
 action_joint_order: [...]
 sdk_joint_order: [...]
 ```
 
 `obs_joint_order`、`action_joint_order` 和 `sdk_joint_order` 会按关节名自动推导重排索引，不需要手写 index。
+
+G1 policy 必须按训练时使用的 IMU 设置 `imu_source`。`pelvis` 读取
+`LowState.imu_state`，`torso` 订阅 `rt/secondary_imu`；G1 仿真会同时发布两路。
+其他机器人必须省略 `imu_source`，始终读取各自的 `LowState.imu_state`。
 
 ## 🔁 多策略切换
 

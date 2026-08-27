@@ -216,6 +216,29 @@ class SimBridge:
             label="IMU accelerometer",
             required=False,
         )
+        # secondary imu is specially for G1
+        self.secondary_imu_quat = None
+        self.secondary_imu_gyro = None
+        self.secondary_imu_acc = None
+        if self.dds.secondary_imu_topic is not None:
+            self.secondary_imu_quat = self.named_sensor_slice(
+                "secondary_imu_quat",
+                mujoco.mjtSensor.mjSENS_FRAMEQUAT,
+                label="secondary IMU quaternion",
+                min_dim=4,
+            )
+            self.secondary_imu_gyro = self.named_sensor_slice(
+                "secondary_imu_gyro",
+                mujoco.mjtSensor.mjSENS_GYRO,
+                label="secondary IMU gyro",
+                min_dim=3,
+            )
+            self.secondary_imu_acc = self.named_sensor_slice(
+                "secondary_imu_acc",
+                mujoco.mjtSensor.mjSENS_ACCELEROMETER,
+                label="secondary IMU accelerometer",
+                min_dim=3,
+            )
         self.crc = CRC()
 
         self.band_site_ids = (
@@ -231,6 +254,13 @@ class SimBridge:
 
         self.lowstate_pub = ChannelPublisher(self.dds.lowstate_topic, self.dds.lowstate_type)
         self.lowstate_pub.Init()
+        self.secondary_imu_pub = None
+        if self.dds.secondary_imu_topic is not None and self.dds.secondary_imu_type is not None:
+            self.secondary_imu_pub = ChannelPublisher(
+                self.dds.secondary_imu_topic,
+                self.dds.secondary_imu_type,
+            )
+            self.secondary_imu_pub.Init()
         self.odom_pub = ChannelPublisher(ODOM_TOPIC, SportModeState_)
         self.odom_pub.Init()
         self.lowcmd_sub = ChannelSubscriber(self.dds.lowcmd_topic, self.dds.lowcmd_type)
@@ -306,6 +336,25 @@ class SimBridge:
             )
         log(f"MuJoCo XML has no {label} sensor; using fallback data")
         return None
+
+    def named_sensor_slice(
+        self,
+        name: str,
+        sensor_type: mujoco.mjtSensor,
+        *,
+        label: str,
+        min_dim: int,
+    ) -> tuple[int, int]:
+        sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
+        if sid < 0:
+            raise ValueError(f"MuJoCo XML missing required {label} sensor {name!r}")
+        if int(self.model.sensor_type[sid]) != int(sensor_type):
+            raise ValueError(f"MuJoCo {label} sensor {name!r} has the wrong sensor type")
+        adr = int(self.model.sensor_adr[sid])
+        dim = int(self.model.sensor_dim[sid])
+        if dim < min_dim:
+            raise ValueError(f"MuJoCo {label} sensor {name!r} has dim={dim}, expected >= {min_dim}")
+        return adr, dim
 
     def site_ids(self, names: tuple[str, ...]) -> list[int]:
         site_ids = []
@@ -510,15 +559,29 @@ class SimBridge:
             acc_adr, dim = self.imu_acc
             if dim >= 3:
                 acc = sensordata[acc_adr : acc_adr + 3]
-        return qpos, qvel, ctrl, gyro, acc
+        secondary_imu = None
+        if self.secondary_imu_quat is not None:
+            quat_adr, _ = self.secondary_imu_quat
+            gyro_adr, _ = self.secondary_imu_gyro
+            acc_adr, _ = self.secondary_imu_acc
+            secondary_imu = (
+                sensordata[quat_adr : quat_adr + 4],
+                sensordata[gyro_adr : gyro_adr + 3],
+                sensordata[acc_adr : acc_adr + 3],
+            )
+        return qpos, qvel, ctrl, gyro, acc, secondary_imu
 
     @staticmethod
-    def fill_imu(msg, quat, gyro, acc) -> None:
-        msg.imu_state.quaternion = quat.tolist()
-        msg.imu_state.gyroscope = gyro.tolist()
-        msg.imu_state.accelerometer = acc.tolist()
-        if hasattr(msg.imu_state, "rpy"):
-            msg.imu_state.rpy = quat_to_rpy(quat)
+    def fill_imu_state(imu_state, quat, gyro, acc) -> None:
+        imu_state.quaternion = quat.tolist()
+        imu_state.gyroscope = gyro.tolist()
+        imu_state.accelerometer = acc.tolist()
+        if hasattr(imu_state, "rpy"):
+            imu_state.rpy = quat_to_rpy(quat)
+
+    @classmethod
+    def fill_imu(cls, msg, quat, gyro, acc) -> None:
+        cls.fill_imu_state(msg.imu_state, quat, gyro, acc)
 
     def make_lowstate(self, qpos, qvel, ctrl, gyro, acc):
         msg = self.dds.make_lowstate()
@@ -539,6 +602,13 @@ class SimBridge:
         self.tick += 1
         return msg
 
+    def make_secondary_imu(self, quat, gyro, acc):
+        if self.dds.make_secondary_imu is None:
+            raise RuntimeError("secondary IMU is not supported by this robot")
+        msg = self.dds.make_secondary_imu()
+        self.fill_imu_state(msg, quat, gyro, acc)
+        return msg
+
     def make_odom(self, qpos, qvel, gyro, acc) -> SportModeState_:
         msg = unitree_go_msg_dds__SportModeState_()
         msg.position = qpos[:3].tolist()
@@ -549,8 +619,10 @@ class SimBridge:
     def publish_state_loop(self) -> None:
         timer = LoopTimer(STATE_HZ)
         while self.alive:
-            qpos, qvel, ctrl, gyro, acc = self.state_snapshot()
+            qpos, qvel, ctrl, gyro, acc, secondary_imu = self.state_snapshot()
             self.lowstate_pub.Write(self.make_lowstate(qpos, qvel, ctrl, gyro, acc))
+            if self.secondary_imu_pub is not None and secondary_imu is not None:
+                self.secondary_imu_pub.Write(self.make_secondary_imu(*secondary_imu))
             self.odom_pub.Write(self.make_odom(qpos, qvel, gyro, acc))
             timer.sleep()
 
@@ -608,7 +680,7 @@ class SimBridge:
         log(
             f"dds={self.dds.type} "
             f"topics: lowcmd={self.dds.lowcmd_topic}, lowstate={self.dds.lowstate_topic}, "
-            f"odom={ODOM_TOPIC}"
+            f"secondary_imu={self.dds.secondary_imu_topic or 'none'}, odom={ODOM_TOPIC}"
         )
         log(f"sim={SIM_HZ}Hz state_pub={STATE_HZ}Hz viewer={self.config.viewer}")
         log(f"simulation starts paused; press \"space\" to continue")
@@ -631,7 +703,9 @@ class SimBridge:
 
     def cleanup(self) -> None:
         self.alive = False
-        for obj in (self.lowcmd_sub, self.lowstate_pub, self.odom_pub):
+        for obj in (self.lowcmd_sub, self.lowstate_pub, self.secondary_imu_pub, self.odom_pub):
+            if obj is None:
+                continue
             try:
                 obj.Close()
             except Exception:
