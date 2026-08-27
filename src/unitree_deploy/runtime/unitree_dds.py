@@ -10,16 +10,19 @@ from unitree_deploy.config.defaults import (
     HG_ROBOTS,
     LOWCMD_TOPIC,
     LOWSTATE_TOPIC,
+    SECONDARY_IMU_TOPIC,
 )
 from unitree_sdk2py.idl.default import (
     unitree_go_msg_dds__LowCmd_,
     unitree_go_msg_dds__LowState_,
+    unitree_hg_msg_dds__IMUState_,
     unitree_hg_msg_dds__LowCmd_,
     unitree_hg_msg_dds__LowState_,
 )
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_ as GoLowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_ as GoLowState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_ as HGLowCmd_
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import IMUState_ as HGIMUState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_ as HGLowState_
 
 
@@ -35,6 +38,9 @@ class LowLevelDDS:
     make_lowcmd: Callable[[], object]
     make_lowstate: Callable[[], object]
     has_mode_fields: bool
+    secondary_imu_topic: str | None = None
+    secondary_imu_type: type | None = None
+    make_secondary_imu: Callable[[], object] | None = None
 
 
 def make_go_lowcmd_msg() -> object:
@@ -76,6 +82,9 @@ def resolve_low_level_dds(robot: str | None) -> LowLevelDDS:
             make_lowcmd=make_hg_lowcmd_msg,
             make_lowstate=unitree_hg_msg_dds__LowState_,
             has_mode_fields=True,  # whether need to set mode_pr and mode_machine
+            secondary_imu_topic=SECONDARY_IMU_TOPIC,
+            secondary_imu_type=HGIMUState_,
+            make_secondary_imu=unitree_hg_msg_dds__IMUState_,
         )
     else:
         raise ValueError(f"unknown robot name {robot_name!r}, cannot resolve low-level DDS")

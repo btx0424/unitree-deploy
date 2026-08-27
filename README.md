@@ -60,10 +60,11 @@ environment.
 - Run a controller against the simulator:
 
     ```bash
+    # By default, it loads `policy.yaml` in the provides ckpt path
     unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
 
-    # Or select a policy YAML file directly.
-    unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy.yaml
+    # Or specify a policy YAML file directly.
+    unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy_torso_base.yaml
     ```
 
 - Run with a multi-policy manifest:
@@ -151,6 +152,7 @@ ckpt/<robot>/<policy>/
 
 ```yaml
 policy_path: "policy.onnx"
+imu_source: pelvis  # G1: pelvis or torso
 obs_joint_order: [...]
 action_joint_order: [...]
 sdk_joint_order: [...]
@@ -159,6 +161,11 @@ sdk_joint_order: [...]
 `obs_joint_order`, `action_joint_order`, and `sdk_joint_order` are matched by
 joint name. Reorder indices are derived automatically, so they do not need to be
 written by hand.
+
+G1 policies must set `imu_source` to match training. `pelvis` reads
+`LowState.imu_state`; `torso` subscribes to `rt/secondary_imu`. The simulator
+publishes both sources for G1. Other robots must omit `imu_source` and always
+use their own `LowState.imu_state`.
 
 ## 🔁 Multi-Policy Switching
 

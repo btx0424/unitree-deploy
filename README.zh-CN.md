@@ -56,10 +56,11 @@ unitree-sim-bridge --robot g1
 启动仿真 controller：
 
 ```bash
+# ckpt参数如果输入为路径，默认加载其中的policy.yaml文件
 unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat
 
 # 也可以直接指定 policy YAML 文件。
-unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy.yaml
+unitree-controller --mode sim --ckpt ckpt/g1/vanilla_ppo_flat/policy_torso_base.yaml
 ```
 
 使用 multi-policy 配置：
@@ -133,12 +134,17 @@ unitree-plugin-template ckpt --robot g1 --name my_policy
 
 ```yaml
 policy_path: "policy.onnx"
+imu_source: pelvis  # G1 可选 pelvis 或 torso
 obs_joint_order: [...]
 action_joint_order: [...]
 sdk_joint_order: [...]
 ```
 
 `obs_joint_order`、`action_joint_order` 和 `sdk_joint_order` 会按关节名自动推导重排索引，不需要手写 index。
+
+G1 policy 必须按训练时使用的 IMU 设置 `imu_source`。`pelvis` 读取
+`LowState.imu_state`，`torso` 订阅 `rt/secondary_imu`；G1 仿真会同时发布两路。
+其他机器人必须省略 `imu_source`，始终读取各自的 `LowState.imu_state`。
 
 ## 🔁 多策略切换
 

@@ -3,6 +3,7 @@
 #
 
 robot: g1
+imu_source: pelvis  # pelvis: LowState.imu_state; torso: rt/secondary_imu
 policy_path: "policy.onnx"
 policy_class: "mjlab_motion_tracking_policy:MotionTrackingPolicy"
 

@@ -6,6 +6,7 @@ DEFAULT_MODE = "sim"
 
 LOWCMD_TOPIC = "rt/lowcmd"
 LOWSTATE_TOPIC = "rt/lowstate"
+SECONDARY_IMU_TOPIC = "rt/secondary_imu"
 ODOM_TOPIC = "rt/odommodestate"
 
 SIM_HZ = 500
