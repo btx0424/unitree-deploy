@@ -53,6 +53,10 @@ uv sync --extra viewer
 unitree-sim-bridge --robot g1
 ```
 
+MuJoCo Viewer 中按 `T` 可切换相机是否跟随机器人。按 `F12` 可切换是否
+屏蔽 MuJoCo 原生键盘快捷键；屏蔽后仅响应 `F12` 和 `T`。相机跟随功能要求
+机器人 `visualizer.yaml` 中的 `viewer.camera.track_body` 已配置。
+
 启动仿真 controller：
 
 ```bash

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+import glfw
 import mujoco
 import mujoco.viewer
 
@@ -69,11 +70,18 @@ class MujocoViewerBackend:
         *,
         sim_hz: int,
         render_hz: int,
+        log: Callable[[str], None],
     ) -> None:
         self.model = model
         self.data = data
         self.camera = camera
+        self.log = log
         self.track_body_id = self.resolve_track_body_id()
+        self.tracking_enabled = self.track_body_id is not None
+        self.keyboard_masked = False
+        self._viewer_window = None
+        self._mujoco_key_callback = None
+        self._masked_key_callback = glfw._GLFWkeyfun(self.on_masked_key)
         self.viewer = None
         self.viewer_tick = 0
         self.viewer_decim = max(1, sim_hz // render_hz)
@@ -94,6 +102,7 @@ class MujocoViewerBackend:
         with mujoco.viewer.launch_passive(
             self.model,
             self.data,
+            key_callback=self.on_key,
             show_left_ui=False,
             show_right_ui=False,
         ) as viewer:
@@ -102,8 +111,66 @@ class MujocoViewerBackend:
             viewer.cam.distance = self.camera.distance
             viewer.cam.elevation = self.camera.elevation
             viewer.cam.azimuth = self.camera.azimuth
+            self.log("MuJoCo keyboard: press F12 to toggle native keyboard input")
+            if self.track_body_id is not None:
+                self.log("MuJoCo camera: press T to toggle robot tracking")
             simulate()
             self.viewer = None
+
+    def on_key(self, key: int) -> None:
+        if key == glfw.KEY_F12:
+            self.enable_keyboard_mask()
+        elif key == glfw.KEY_T:
+            self.toggle_tracking()
+
+    def on_masked_key(
+        self,
+        _window,
+        key: int,
+        _scancode: int,
+        action: int,
+        _mods: int,
+    ) -> None:
+        if action != glfw.PRESS:
+            return
+        if key == glfw.KEY_F12:
+            self.disable_keyboard_mask()
+        elif key == glfw.KEY_T:
+            self.toggle_tracking()
+
+    def enable_keyboard_mask(self) -> None:
+        if self.keyboard_masked:
+            return
+        window = glfw.get_current_context()
+        if not window:
+            self.log("camera keyboard mask unavailable: no current GLFW window")
+            return
+
+        # MuJoCo's Python key callback cannot consume events. Replacing the
+        # underlying GLFW callback is the only way to block its native keys.
+        previous = glfw._glfw.glfwSetKeyCallback(window, self._masked_key_callback)
+        if not previous:
+            self.log("camera keyboard mask unavailable: MuJoCo callback not found")
+            return
+        self._viewer_window = window
+        self._mujoco_key_callback = previous
+        self.keyboard_masked = True
+        self.log("MuJoCo keyboard input=masked (F12: unmask, T: camera tracking)")
+
+    def disable_keyboard_mask(self) -> None:
+        if not self.keyboard_masked:
+            return
+        if self._viewer_window is None or self._mujoco_key_callback is None:
+            return
+        glfw._glfw.glfwSetKeyCallback(self._viewer_window, self._mujoco_key_callback)
+        self.keyboard_masked = False
+        self.log("MuJoCo keyboard input=enabled")
+
+    def toggle_tracking(self) -> None:
+        if self.track_body_id is None:
+            return
+        self.tracking_enabled = not self.tracking_enabled
+        self.log(f"camera tracking={'on' if self.tracking_enabled else 'off'}")
 
     def sync(self) -> bool:
         if self.viewer is None:
@@ -117,7 +184,7 @@ class MujocoViewerBackend:
         return True
 
     def update_tracked_lookat(self) -> None:
-        if self.viewer is None or self.track_body_id is None:
+        if self.viewer is None or self.track_body_id is None or not self.tracking_enabled:
             return
         self.viewer.cam.lookat[:] = self.data.xpos[self.track_body_id] + self.camera.track_offset
 
@@ -140,5 +207,6 @@ def create_viewer_backend(
             camera,
             sim_hz=sim_hz,
             render_hz=render_hz,
+            log=log,
         )
     raise ValueError(f"unsupported viewer backend: {viewer}")

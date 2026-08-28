@@ -57,6 +57,11 @@ environment.
     unitree-sim-bridge --robot g1
     ```
 
+    Press `T` in the MuJoCo Viewer to toggle camera tracking. Press `F12` to
+    mask or unmask MuJoCo's native keyboard shortcuts; while masked, only
+    `F12` and `T` are handled. Camera tracking requires `viewer.camera.track_body`
+    to be configured in the robot's `visualizer.yaml`.
+
 - Run a controller against the simulator:
 
     ```bash
